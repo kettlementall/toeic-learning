@@ -1,11 +1,13 @@
 # TOEIC Learning Platform
 
-An AI-assisted TOEIC vocabulary and grammar trainer. Look up real words from an
-online dictionary, build a personal vocabulary library, review it with a
-spaced-repetition (SM-2) scheduler, and take AI-generated quizzes (vocabulary
-multiple-choice, Part 5 grammar, sentence fill-in-the-blank) that adapt to your
-weak points. A dashboard tracks your progress, error rates by grammar point and
-part of speech, and "leech" words you keep getting wrong.
+An AI-assisted TOEIC vocabulary and grammar trainer. Register an account, look
+up real words from an online dictionary, build your **own** vocabulary library,
+review it with a spaced-repetition (SM-2) scheduler, and take AI-generated
+quizzes (vocabulary multiple-choice, Part 5 grammar, sentence fill-in-the-blank)
+that adapt to your weak points. A dashboard tracks your progress, error rates by
+grammar point and part of speech, and "leech" words you keep getting wrong.
+Every user's library, quizzes, and stats are private to them; an administrator
+can manage accounts.
 
 > **Security note:** keep your `ANTHROPIC_API_KEY` in `backend/.env`, which is
 > git-ignored and never committed. If a key is ever exposed, rotate it in the
@@ -15,6 +17,12 @@ part of speech, and "leech" words you keep getting wrong.
 
 ## Features
 
+- **Accounts** — open self-service registration; each user gets a private
+  training database (vocabulary, quizzes, review history, dashboard). Sign in
+  with a unique **account id** (your chosen `name`) — email is optional. Session
+  cookie auth. Administrators (`is_admin`) get a user-management screen to list
+  users with per-user stats and create / disable / delete accounts and reset
+  passwords. Disabled accounts (`is_active=false`) cannot log in.
 - **Word search** — look up any English word via the free
   [dictionaryapi.dev](https://dictionaryapi.dev) API; Claude enriches it with
   Traditional Chinese translations (per part of speech) and a TOEIC usage note.
@@ -70,7 +78,7 @@ toeic-learning/
 │   └── nginx/default.conf      # serves backend/public
 └── backend/                    # Laravel application
     ├── app/
-    │   ├── Http/Controllers/   # Dashboard, Word, Vocabulary, Review, Quiz
+    │   ├── Http/Controllers/   # Dashboard, Word, Vocabulary, Review, Quiz, Auth/*, Admin/*
     │   ├── Models/             # Word, UserWord, Quiz, QuizQuestion, ReviewLog, User
     │   └── Services/
     │       ├── ClaudeService.php            # Anthropic API: enrich, generate, review
@@ -78,10 +86,10 @@ toeic-learning/
     │       ├── SpacedRepetitionService.php  # SM-2 algorithm, leeches
     │       └── QuizBuilderService.php       # word/grammar-point selection (adaptive)
     ├── database/
-    │   ├── migrations/         # words, user_words, quizzes, quiz_questions, review_logs
+    │   ├── migrations/         # users(+roles), words, user_words, quizzes, quiz_questions, review_logs
     │   └── seeders/WordSeeder.php  # ~142 seed TOEIC words across 10 categories
-    ├── resources/views/        # Blade: layouts/app, dashboard, words, vocabulary, review, quiz
-    └── routes/web.php          # all app routes (no auth)
+    ├── resources/views/        # Blade: layouts/app, dashboard, words, vocabulary, review, quiz, auth/*, admin/*
+    └── routes/web.php          # guest (login/register) + auth-guarded app + admin routes
 ```
 
 ---
@@ -107,6 +115,15 @@ docker compose exec php npm run build
 
 The app is served at **http://localhost:8080**. MySQL is exposed on host port
 **3307** (container 3306).
+
+The migration seeds a default **admin** account — login id **`wells`**, password
+`password` — which also owns any data that predates the accounts system.
+**Change this password after first login** (Admin → your row → Reset password).
+Everyone else signs up at `/register`.
+
+> **Login uses an account id**, not email. You sign in with the `name` you chose
+> at registration (the seeded admin's id is `wells`). Email is optional and only
+> kept for reference.
 
 The Docker `.env` should point the DB at the compose service:
 
@@ -184,8 +201,16 @@ the relevant pages. `ClaudeService::hasKey()` gates all AI calls.
 
 ## Routes
 
+All app routes below require an authenticated session; the admin routes also
+require `is_admin`.
+
 | Method | URI                       | Name                | Description                          |
 |--------|---------------------------|---------------------|--------------------------------------|
+| GET    | `/register`               | `register`          | Registration form (guest)            |
+| POST   | `/register`               | —                   | Create account + log in              |
+| GET    | `/login`                  | `login`             | Login form (guest)                   |
+| POST   | `/login`                  | —                   | Authenticate                         |
+| POST   | `/logout`                 | `logout`            | Log out                              |
 | GET    | `/`                       | `dashboard`         | Progress dashboard                   |
 | GET    | `/words`                  | `words.index`       | Word search page                     |
 | GET    | `/words/lookup?q=`        | `words.lookup`      | AJAX dictionary lookup (JSON)        |
@@ -200,9 +225,15 @@ the relevant pages. `ClaudeService::hasKey()` gates all AI calls.
 | GET    | `/quiz/{quiz}`            | `quiz.show`         | Take the quiz                        |
 | POST   | `/quiz/{quiz}/submit`     | `quiz.submit`       | Submit answers                       |
 | GET    | `/quiz/{quiz}/review`     | `quiz.review`       | Results + AI review                  |
+| GET    | `/admin/users`            | `admin.users.index` | User list + stats (admin)            |
+| POST   | `/admin/users`            | `admin.users.store` | Create a user (admin)                |
+| PUT    | `/admin/users/{user}`     | `admin.users.update`| Toggle active / reset password (admin)|
+| DELETE | `/admin/users/{user}`     | `admin.users.destroy`| Delete a user + their data (admin)  |
 
-> **No authentication.** The app currently treats data as belonging to a single
-> implicit user. `users` and session tables exist but no login flow is wired up.
+> **Per-user data.** Every request runs as the logged-in user; vocabulary,
+> quizzes, and review history are scoped by `user_id`. The shared `words`
+> dictionary/seed cache stays global. Ownership is enforced on each route
+> (route-model-bound `UserWord`/`Quiz` return 403 for non-owners).
 
 ---
 

@@ -17,17 +17,20 @@ class DashboardController extends Controller
 
     public function index()
     {
-        $totalWords = UserWord::count();
-        $dueCount = $this->srs->dueCount();
-        $totalQuizzes = Quiz::where('status', 'completed')->count();
+        $userId = auth()->id();
 
-        $completed = Quiz::where('status', 'completed')->where('total', '>', 0)->get();
+        $totalWords = UserWord::forUser($userId)->count();
+        $dueCount = $this->srs->dueCount();
+        $totalQuizzes = Quiz::where('user_id', $userId)->where('status', 'completed')->count();
+
+        $completed = Quiz::where('user_id', $userId)->where('status', 'completed')->where('total', '>', 0)->get();
         $avgAccuracy = $completed->count()
             ? round($completed->avg(fn ($q) => $q->total ? $q->score / $q->total * 100 : 0), 1)
             : 0;
 
         // recent score trend (last 10)
-        $recentQuizzes = Quiz::where('status', 'completed')
+        $recentQuizzes = Quiz::where('user_id', $userId)
+            ->where('status', 'completed')
             ->latest('completed_at')
             ->limit(10)
             ->get()
@@ -35,7 +38,8 @@ class DashboardController extends Controller
             ->values();
 
         // grammar weakness ranking (Part 5)
-        $grammarStats = ReviewLog::whereNotNull('grammar_point')
+        $grammarStats = ReviewLog::where('user_id', $userId)
+            ->whereNotNull('grammar_point')
             ->select('grammar_point',
                 DB::raw('COUNT(*) as total'),
                 DB::raw('SUM(CASE WHEN quality < 3 THEN 1 ELSE 0 END) as wrong'))
@@ -51,7 +55,8 @@ class DashboardController extends Controller
             ->values();
 
         // vocab weakness by part of speech
-        $posStats = ReviewLog::whereNotNull('part_of_speech')
+        $posStats = ReviewLog::where('user_id', $userId)
+            ->whereNotNull('part_of_speech')
             ->select('part_of_speech',
                 DB::raw('COUNT(*) as total'),
                 DB::raw('SUM(CASE WHEN quality < 3 THEN 1 ELSE 0 END) as wrong'))
@@ -66,14 +71,16 @@ class DashboardController extends Controller
             ->values();
 
         // leeches: chronically-failed words
-        $leeches = UserWord::leeches()
+        $leeches = UserWord::forUser($userId)
+            ->leeches()
             ->with('dictionary')
             ->orderByDesc('lapses')
             ->limit(10)
             ->get();
 
         // latest AI-recommended grammar focus (most recent quiz that has one)
-        $aiGrammarFocus = Quiz::where('status', 'completed')
+        $aiGrammarFocus = Quiz::where('user_id', $userId)
+            ->where('status', 'completed')
             ->whereNotNull('ai_review')
             ->latest('completed_at')
             ->limit(8)

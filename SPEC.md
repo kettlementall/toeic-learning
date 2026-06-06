@@ -20,8 +20,11 @@ through three reinforcing loops:
    adaptive question selector.
 
 ### 1.2 Scope & assumptions
-- **Single implicit user.** No authentication or per-user partitioning; all
-  records are global. A `users` table exists but is unused by the app flow.
+- **Multi-user.** Session-cookie authentication; every user has a private
+  training database. Personal data (`user_words`, `quizzes`, `review_logs`) is
+  partitioned by `user_id`; the `words` dictionary/seed cache is shared global
+  reference data. Open self-service registration. An admin role (`is_admin`)
+  unlocks user management. Accounts can be disabled (`is_active=false`).
 - **Traditional Chinese** is the translation/explanation language throughout AI
   prompts.
 - AI features are **optional**: with no `ANTHROPIC_API_KEY`, dictionary lookups
@@ -29,7 +32,8 @@ through three reinforcing loops:
 
 ### 1.3 Non-goals
 - Listening/reading full-test simulation (Parts 1–4, 6, 7).
-- Multi-user accounts, sharing, or social features.
+- Sharing or social features; cross-user data sharing.
+- Email verification / password-reset-by-email flows (admins reset passwords).
 - Mobile native apps (the web UI is responsive instead).
 
 ---
@@ -37,6 +41,19 @@ through three reinforcing loops:
 ## 2. Domain Model
 
 ### 2.1 Entities
+
+#### `users` — accounts
+Laravel's default users table plus two role flags.
+
+| Column        | Type        | Notes                                              |
+|---------------|-------------|----------------------------------------------------|
+| `name`        | string      | **unique** — the login id                          |
+| `email`       | string      | nullable, optional (unique when present)           |
+| `password`    | string      | hashed                                             |
+| `is_admin`    | boolean     | default false; unlocks the admin area              |
+| `is_active`   | boolean     | default true; false ⇒ cannot log in                |
+
+Owns `user_words`, `quizzes`, `review_logs` (each `cascadeOnDelete`).
 
 #### `words` — dictionary cache / word catalog
 Canonical, deduplicated record of a word's reference data. Populated from the
@@ -62,8 +79,9 @@ seed list, the dictionary API, or AI-generated new words.
 #### `user_words` — personal vocabulary + SM-2 state
 | Column            | Type         | Notes                                                       |
 |-------------------|--------------|-------------------------------------------------------------|
+| `user_id`         | FK→users     | owner, `cascadeOnDelete`                                    |
 | `word_id`         | FK→words     | nullable, `nullOnDelete`                                    |
-| `word`            | string(100)  | **unique**, lowercased                                      |
+| `word`            | string(100)  | lowercased; **unique per user** (`user_id, word`)          |
 | `source`          | string(15)   | `search`\|`manual`\|`quiz_weak`\|`quiz_new`\|`ai_review`    |
 | `notes`           | text         | user notes                                                  |
 | `tags`            | string(200)  | free-text, comma-style; matched by `LIKE`                  |
@@ -77,6 +95,7 @@ seed list, the dictionary API, or AI-generated new words.
 #### `quizzes`
 | Column        | Type        | Notes                                          |
 |---------------|-------------|------------------------------------------------|
+| `user_id`     | FK→users    | owner, `cascadeOnDelete`                        |
 | `title`       | string(200) | e.g. "Part 5 Grammar Quiz · 06/04 14:30"       |
 | `type`        | string(20)  | `vocab_mc`\|`part5_grammar`\|`fill_blank`      |
 | `scope`       | string(10)  | `builtin`\|`custom`\|`mixed`                    |
@@ -105,6 +124,7 @@ boost). Drives all dashboard stats and adaptive grammar selection.
 
 | Column          | Type        | Notes                                   |
 |-----------------|-------------|-----------------------------------------|
+| `user_id`       | FK→users    | owner, `cascadeOnDelete`                |
 | `user_word_id`  | FK→user_words | nullable                              |
 | `quiz_id`       | FK→quizzes  | nullable                                |
 | `category`      | string(50)  | denormalized from the word              |
@@ -114,6 +134,7 @@ boost). Drives all dashboard stats and adaptive grammar selection.
 | `reviewed_at`   | timestamp   | event time                              |
 
 ### 2.2 Relationships
+- `User` 1—* `UserWord` / `Quiz` / `ReviewLog` (all `cascadeOnDelete`).
 - `Word` 1—* `UserWord` (`UserWord.dictionary` = `belongsTo Word`).
 - `Quiz` 1—* `QuizQuestion`.
 - `ReviewLog` references `UserWord` and/or `Quiz` (both nullable).
@@ -121,6 +142,25 @@ boost). Drives all dashboard stats and adaptive grammar selection.
 ---
 
 ## 3. Functional Requirements
+
+### 3.0 Accounts & access control (`Auth\*`, `Admin\UserController`, `EnsureUserIsAdmin`)
+- **FR-A1** Open registration: `GET/POST /register` validates a unique account
+  id (`name`), an optional unique email, and a confirmed password (min 8);
+  creates a non-admin, active user, logs them in, regenerates the session.
+- **FR-A2** Login: `GET/POST /login` authenticates by **account id** (`name`)
+  via the `web` guard with an added `is_active = true` constraint, so disabled
+  accounts cannot sign in. Email is not used for login. `POST /logout`
+  invalidates the session.
+- **FR-A3** All application routes (dashboard, words, vocabulary, review, quiz)
+  sit behind the `auth` middleware; guests are redirected to `login`.
+- **FR-A4** Every owned query is scoped by `auth()->id()`. Route-model-bound
+  `UserWord`/`Quiz` additionally assert ownership and return **403** for
+  non-owners. The shared `words` cache is never user-scoped.
+- **FR-A5** Admin area (`/admin/users`, `admin` middleware ⇒ `is_admin` else
+  403): list users with per-user stats (vocab count, completed-quiz count, last
+  activity); create users; toggle `is_active`; reset a password; delete a user
+  (cascades their owned rows). An admin cannot disable or delete **their own**
+  account.
 
 ### 3.1 Word lookup (`WordController`, `DictionaryService`)
 - **FR-1** `GET /words/lookup?q=<term>` returns JSON for a single word.
@@ -337,10 +377,18 @@ categories — business, contracts, finance, general, hr, logistics, marketing,
 office, technology, travel — each with POS, Chinese meaning, example, and level.
 Idempotent via `updateOrCreate` on `word`.
 
+The `seed_wells_admin_and_backfill` migration also creates a default **admin**
+(login id `wells`, password `password` — change after first login) and assigns
+any pre-existing single-user rows to it, before switching the `user_words`
+unique key from `word` to `(user_id, word)`.
+
 ---
 
 ## 8. Security & Privacy
-- **SEC-1** No authentication; deploy behind access control if exposed.
+- **SEC-1** Session-cookie authentication (Laravel `web` guard). All app routes
+  require `auth`; the admin area additionally requires `is_admin`. Per-user data
+  is isolated by `user_id`, with ownership re-checked on bound routes (403 on
+  mismatch). Disabled accounts (`is_active=false`) cannot log in.
 - **SEC-2** The Anthropic API key lives only in `.env`, which is git-ignored and
   kept out of version control. Rotate it in the Anthropic Console if exposed.
 - **SEC-3** All write routes are CSRF-protected (Laravel default; meta tag in

@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class Quiz extends Model
 {
     protected $fillable = [
-        'title', 'type', 'scope', 'status', 'score', 'total',
+        'user_id', 'title', 'type', 'scope', 'status', 'score', 'total',
         'ai_review', 'completed_at',
     ];
 

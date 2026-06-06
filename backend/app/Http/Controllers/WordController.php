@@ -65,7 +65,7 @@ class WordController extends Controller
         }
 
         // auto-add to vocabulary (source=search), init SRS to today
-        $uw = UserWord::firstOrNew(['word' => $word->word]);
+        $uw = UserWord::firstOrNew(['user_id' => auth()->id(), 'word' => $word->word]);
         $created = ! $uw->exists;
         if ($created) {
             $uw->word_id = $word->id;

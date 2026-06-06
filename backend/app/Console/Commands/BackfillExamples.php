@@ -12,7 +12,8 @@ class BackfillExamples extends Command
 {
     protected $signature = 'words:backfill-examples
                             {--limit=200 : Max words to generate examples for}
-                            {--chunk=20 : How many words per AI request}';
+                            {--chunk=20 : How many words per AI request}
+                            {--user-id= : Only consider one user\'s library (default: all users)}';
 
     protected $description = 'Fill in missing example sentences for words in the vocabulary library';
 
@@ -25,9 +26,13 @@ class BackfillExamples extends Command
 
     public function handle(): int
     {
+        $userId = $this->option('user-id') ? (int) $this->option('user-id') : null;
+
         // 1. Link orphaned vocabulary (no dictionary row) so their card has data.
         //    A dictionary lookup also pulls in an example when the API has one.
-        $orphans = UserWord::whereNull('word_id')->get();
+        $orphans = UserWord::whereNull('word_id')
+            ->when($userId, fn ($q) => $q->where('user_id', $userId))
+            ->get();
         if ($orphans->isNotEmpty()) {
             $this->info("Linking {$orphans->count()} orphaned word(s) to dictionary entries...");
             $linked = 0;
@@ -50,7 +55,9 @@ class BackfillExamples extends Command
         $limit = max(1, (int) $this->option('limit'));
         $chunkSize = max(1, (int) $this->option('chunk'));
 
-        $libraryWordIds = UserWord::whereNotNull('word_id')->pluck('word_id')->unique();
+        $libraryWordIds = UserWord::whereNotNull('word_id')
+            ->when($userId, fn ($q) => $q->where('user_id', $userId))
+            ->pluck('word_id')->unique();
 
         $missing = Word::whereIn('id', $libraryWordIds)
             ->where(fn ($q) => $q->whereNull('example')->orWhere('example', ''))

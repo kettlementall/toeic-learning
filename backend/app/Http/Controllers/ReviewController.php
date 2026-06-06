@@ -21,6 +21,8 @@ class ReviewController extends Controller
 
     public function grade(Request $request, UserWord $userWord)
     {
+        abort_if($userWord->user_id !== auth()->id(), 403);
+
         $data = $request->validate([
             'quality' => 'required|integer|min:0|max:5',
         ]);

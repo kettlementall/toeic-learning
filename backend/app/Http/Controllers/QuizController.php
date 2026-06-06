@@ -68,6 +68,7 @@ class QuizController extends Controller
         }
 
         $quiz = Quiz::create([
+            'user_id' => auth()->id(),
             'title' => $this->title($type) . ' · ' . now()->format('m/d H:i'),
             'type' => $type,
             'scope' => $request->input('scope', 'mixed'),
@@ -102,6 +103,8 @@ class QuizController extends Controller
 
     public function show(Quiz $quiz)
     {
+        $this->authorizeOwner($quiz);
+
         if ($quiz->status === 'completed') {
             return redirect()->route('quiz.review', $quiz);
         }
@@ -113,6 +116,8 @@ class QuizController extends Controller
 
     public function submit(Request $request, Quiz $quiz)
     {
+        $this->authorizeOwner($quiz);
+
         $answers = $request->input('answers', []); // [question_id => 'A']
         $quiz->load('questions');
 
@@ -149,6 +154,8 @@ class QuizController extends Controller
 
     public function review(Quiz $quiz)
     {
+        $this->authorizeOwner($quiz);
+
         $quiz->load('questions');
 
         // generate AI review once
@@ -200,6 +207,7 @@ class QuizController extends Controller
             $code = $this->normalizeGrammarPoint((string) $p);
             if ($code) {
                 ReviewLog::create([
+                    'user_id' => $quiz->user_id,
                     'quiz_id' => $quiz->id,
                     'grammar_point' => $code,
                     'quality' => 1, // counts as a weakness signal
@@ -243,6 +251,7 @@ class QuizController extends Controller
         $dict = $q->word ? Word::where('word', strtolower($q->word))->first() : null;
 
         ReviewLog::create([
+            'user_id' => $quiz->user_id,
             'quiz_id' => $quiz->id,
             'category' => $dict?->category,
             'part_of_speech' => $dict?->part_of_speech,
@@ -255,16 +264,23 @@ class QuizController extends Controller
     private function ensureInLibrary(string $word): void
     {
         $word = trim(strtolower($word));
-        if ($word === '' || UserWord::where('word', $word)->exists()) {
+        if ($word === '' || UserWord::forUser()->where('word', $word)->exists()) {
             return;
         }
         $dict = Word::where('word', $word)->first();
         UserWord::create([
+            'user_id' => auth()->id(),
             'word_id' => $dict?->id,
             'word' => $word,
             'source' => 'quiz_new',
             'next_review_at' => Carbon::today(),
         ]);
+    }
+
+    /** Block access to another user's quiz. */
+    private function authorizeOwner(Quiz $quiz): void
+    {
+        abort_if($quiz->user_id !== auth()->id(), 403);
     }
 
     private function title(string $type): string

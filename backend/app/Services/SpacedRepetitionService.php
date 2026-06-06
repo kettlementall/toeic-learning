@@ -51,25 +51,26 @@ class SpacedRepetitionService
      */
     public function gradeByWord(string $word, int $quality): void
     {
-        $uw = UserWord::where('word', trim(strtolower($word)))->first();
+        $uw = UserWord::forUser()->where('word', trim(strtolower($word)))->first();
         if ($uw) {
             $this->grade($uw, $quality);
         }
     }
 
     /**
-     * Words due for review (next_review_at <= now).
+     * Words due for review (next_review_at <= now) for the current user.
      */
     public function dueWords(): Collection
     {
-        return UserWord::where('next_review_at', '<=', now())
+        return UserWord::forUser()
+            ->where('next_review_at', '<=', now())
             ->orderBy('next_review_at')
             ->get();
     }
 
     public function dueCount(): int
     {
-        return UserWord::where('next_review_at', '<=', now())->count();
+        return UserWord::forUser()->where('next_review_at', '<=', now())->count();
     }
 
     /**
@@ -81,7 +82,7 @@ class SpacedRepetitionService
         $word = trim(strtolower($word));
         $wordModel = Word::where('word', $word)->first();
 
-        $uw = UserWord::firstOrNew(['word' => $word]);
+        $uw = UserWord::firstOrNew(['user_id' => auth()->id(), 'word' => $word]);
         if (! $uw->exists) {
             $uw->word_id = $wordModel?->id;
             $uw->source = $source;
@@ -106,6 +107,7 @@ class SpacedRepetitionService
     {
         $dict = $w->dictionary;
         ReviewLog::create([
+            'user_id' => $w->user_id,
             'user_word_id' => $w->id,
             'category' => $dict?->category,
             'part_of_speech' => $dict?->part_of_speech,

@@ -46,7 +46,8 @@ class QuizBuilderService
 
         // top up review portion from any user words if not enough
         if (count($review) < $reviewN) {
-            $more = UserWord::whereNotIn('word', $review)
+            $more = UserWord::forUser()
+                ->whereNotIn('word', $review)
                 ->inRandomOrder()
                 ->limit($reviewN - count($review))
                 ->pluck('word')
@@ -81,7 +82,7 @@ class QuizBuilderService
             return [];
         }
 
-        $candidates = UserWord::get(['word', 'ease_factor', 'next_review_at']);
+        $candidates = UserWord::forUser()->get(['word', 'ease_factor', 'next_review_at']);
         if ($candidates->isEmpty()) {
             return [];
         }
@@ -110,7 +111,7 @@ class QuizBuilderService
             return [];
         }
 
-        $ownedWords = UserWord::pluck('word')->all();
+        $ownedWords = UserWord::forUser()->pluck('word')->all();
 
         $query = Word::whereNotIn('word', $ownedWords);
         if (! empty($opts['category'])) {
@@ -159,7 +160,7 @@ class QuizBuilderService
         $scope = $opts['scope'] ?? 'mixed';
 
         $query = match ($scope) {
-            'custom' => UserWord::query(),
+            'custom' => UserWord::forUser(),
             'builtin' => Word::where('source', 'seed'),
             default => Word::query(),
         };
@@ -194,7 +195,8 @@ class QuizBuilderService
         }
 
         // adaptive: weight = error rate per grammar point (default weight for unseen)
-        $stats = ReviewLog::whereNotNull('grammar_point')
+        $stats = ReviewLog::where('user_id', auth()->id())
+            ->whereNotNull('grammar_point')
             ->select('grammar_point', DB::raw('COUNT(*) as total'), DB::raw('SUM(CASE WHEN quality < 3 THEN 1 ELSE 0 END) as wrong'))
             ->groupBy('grammar_point')
             ->get()

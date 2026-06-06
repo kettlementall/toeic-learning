@@ -9,7 +9,9 @@ class VocabularyController extends Controller
 {
     public function index(Request $request)
     {
-        $query = UserWord::with('dictionary')->orderByDesc('created_at');
+        $userId = auth()->id();
+
+        $query = UserWord::forUser($userId)->with('dictionary')->orderByDesc('created_at');
 
         if ($source = $request->query('source')) {
             $query->where('source', $source);
@@ -20,13 +22,15 @@ class VocabularyController extends Controller
 
         $words = $query->paginate(30)->withQueryString();
 
-        $sources = UserWord::select('source')->distinct()->pluck('source');
+        $sources = UserWord::forUser($userId)->select('source')->distinct()->pluck('source');
 
         return view('vocabulary.index', compact('words', 'sources'));
     }
 
     public function update(Request $request, UserWord $vocabulary)
     {
+        $this->authorizeOwner($vocabulary);
+
         $data = $request->validate([
             'notes' => 'nullable|string|max:1000',
             'tags' => 'nullable|string|max:200',
@@ -39,9 +43,17 @@ class VocabularyController extends Controller
 
     public function destroy(UserWord $vocabulary)
     {
+        $this->authorizeOwner($vocabulary);
+
         $word = $vocabulary->word;
         $vocabulary->delete();
 
         return back()->with('status', 'Removed “' . $word . '”');
+    }
+
+    /** Block access to another user's vocabulary entry. */
+    private function authorizeOwner(UserWord $vocabulary): void
+    {
+        abort_if($vocabulary->user_id !== auth()->id(), 403);
     }
 }

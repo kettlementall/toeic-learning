@@ -31,6 +31,24 @@
                         {{ $label }}
                     </a>
                 @endforeach
+                @if (auth()->user()?->isAdmin())
+                    <a href="{{ route('admin.users.index') }}"
+                       class="px-3 py-1.5 rounded-md text-sm font-medium {{ request()->routeIs('admin.*') ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-100' }}">
+                        Admin
+                    </a>
+                @endif
+            </div>
+
+            {{-- Desktop / tablet: user menu --}}
+            <div class="hidden md:flex items-center gap-2 ml-auto">
+                <span class="text-sm text-slate-500">{{ auth()->user()?->name }}</span>
+                <form method="POST" action="{{ route('logout') }}">
+                    @csrf
+                    <button type="submit"
+                            class="px-3 py-1.5 rounded-md text-sm font-medium text-slate-600 hover:bg-slate-100">
+                        Logout
+                    </button>
+                </form>
             </div>
 
             {{-- Mobile: hamburger toggle --}}
@@ -55,6 +73,22 @@
                         {{ $label }}
                     </a>
                 @endforeach
+                @if (auth()->user()?->isAdmin())
+                    <a href="{{ route('admin.users.index') }}"
+                       class="px-3 py-2 rounded-md text-sm font-medium {{ request()->routeIs('admin.*') ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-100' }}">
+                        Admin
+                    </a>
+                @endif
+                <div class="border-t mt-1 pt-2 flex items-center justify-between">
+                    <span class="px-3 text-sm text-slate-500">{{ auth()->user()?->name }}</span>
+                    <form method="POST" action="{{ route('logout') }}">
+                        @csrf
+                        <button type="submit"
+                                class="px-3 py-2 rounded-md text-sm font-medium text-slate-600 hover:bg-slate-100">
+                            Logout
+                        </button>
+                    </form>
+                </div>
             </div>
         </div>
     </nav>
