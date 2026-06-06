@@ -341,8 +341,8 @@ Idempotent via `updateOrCreate` on `word`.
 
 ## 8. Security & Privacy
 - **SEC-1** No authentication; deploy behind access control if exposed.
-- **SEC-2** The Anthropic API key must live only in `.env` (git-ignored). The
-  key currently committed must be **rotated** (see README).
+- **SEC-2** The Anthropic API key lives only in `.env`, which is git-ignored and
+  kept out of version control. Rotate it in the Anthropic Console if exposed.
 - **SEC-3** All write routes are CSRF-protected (Laravel default; meta tag in
   the layout). Lookups and grading return JSON.
 - **SEC-4** User-supplied search terms and AI-suggested words are validated and

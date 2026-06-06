@@ -7,10 +7,9 @@ multiple-choice, Part 5 grammar, sentence fill-in-the-blank) that adapt to your
 weak points. A dashboard tracks your progress, error rates by grammar point and
 part of speech, and "leech" words you keep getting wrong.
 
-> ⚠️ **Security note:** a real `ANTHROPIC_API_KEY` is currently committed in
-> `backend/.env`. Treat it as compromised — **rotate/revoke it** in the
-> Anthropic Console and keep `.env` out of version control. See
-> [Configuration](#configuration).
+> **Security note:** keep your `ANTHROPIC_API_KEY` in `backend/.env`, which is
+> git-ignored and never committed. If a key is ever exposed, rotate it in the
+> Anthropic Console. See [Configuration](#configuration).
 
 ---
 
@@ -163,10 +162,10 @@ definitions, phonetics, audio) still work; only the AI features (Chinese
 translation, quiz generation, AI review) are disabled, with a banner shown on
 the relevant pages. `ClaudeService::hasKey()` gates all AI calls.
 
-> **Rotate the committed key.** A live key is present in the current
-> `backend/.env`. Revoke it in the Anthropic Console, issue a new one, and
-> ensure `.env` is git-ignored (Laravel's default `.gitignore` already excludes
-> it).
+> **Keep the key in `.env` only.** `backend/.env` is git-ignored (Laravel's
+> default `.gitignore`, plus a root-level `.gitignore`, both exclude it), so the
+> key stays out of version control. Rotate it in the Anthropic Console if it is
+> ever exposed.
 
 ---
 
