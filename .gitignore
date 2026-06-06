@@ -1,0 +1,15 @@
+# OS / editor junk
+.DS_Store
+Thumbs.db
+*.log
+
+# Safety net: never commit any env file with secrets
+**/.env
+**/.env.backup
+**/.env.production
+
+# Dependencies / build artifacts (also covered by backend/.gitignore)
+backend/vendor/
+backend/node_modules/
+backend/public/build/
+backend/public/hot

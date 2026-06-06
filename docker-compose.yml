@@ -1,0 +1,56 @@
+name: toeic-learning
+
+services:
+  php:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    volumes:
+      - ./backend:/var/www
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - toeic-network
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./backend:/var/www
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - php
+    restart: unless-stopped
+    networks:
+      - toeic-network
+
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: secret
+      MYSQL_DATABASE: toeic_learning
+      MYSQL_USER: toeic
+      MYSQL_PASSWORD: secret
+    ports:
+      - "3307:3306"
+    volumes:
+      - toeic-mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-psecret"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - toeic-network
+
+networks:
+  toeic-network:
+    driver: bridge
+
+volumes:
+  toeic-mysql-data:
