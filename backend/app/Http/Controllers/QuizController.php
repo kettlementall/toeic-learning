@@ -133,7 +133,10 @@ class QuizController extends Controller
             if ($q->word) {
                 // vocab question -> drive SM-2 (also writes the review_log)
                 if ($correct) {
-                    $this->srs->gradeByWord($q->word, 4); // correct multiple-choice ≈ quality 4
+                    // correct multiple-choice -> quality 5 so ease_factor actually
+                    // rises (at quality 4 the SM-2 ease delta is exactly 0, which
+                    // kept answered-right weak words stuck at high selection weight)
+                    $this->srs->gradeByWord($q->word, 5);
                 } else {
                     $this->srs->demote($q->word, 'quiz_weak');
                 }

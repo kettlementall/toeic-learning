@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\Models\Quiz;
+use App\Models\QuizQuestion;
 use App\Models\ReviewLog;
 use App\Models\UserWord;
 use App\Models\Word;
@@ -75,6 +77,11 @@ class QuizBuilderService
     /**
      * Weak / overdue words from the user's library, picked by weighted random
      * sampling (biased toward less-familiar & overdue words, but with variety).
+     *
+     * Words tested in the last few quizzes are down-weighted (cooldown) so the
+     * selection rotates instead of drilling the same cluster of hard words over
+     * and over. Cooldown only reweights — it never excludes — so we never run
+     * short even if the whole library was recently seen.
      */
     private function weakWords(int $n): array
     {
@@ -87,6 +94,8 @@ class QuizBuilderService
             return [];
         }
 
+        $cooldown = $this->recentlyTestedPenalties();
+
         $now = now();
         $weights = [];
         foreach ($candidates as $c) {
@@ -96,10 +105,54 @@ class QuizBuilderService
             if ($c->next_review_at && $c->next_review_at <= $now) {
                 $w *= 2.5;
             }
+            // recently tested -> down-weight so the pool rotates
+            $w *= $cooldown[strtolower(trim($c->word))] ?? 1.0;
             $weights[$c->word] = $w;
         }
 
         return $this->weightedSample($weights, $n);
+    }
+
+    /**
+     * Build a word => multiplier map penalizing words seen in the most recent
+     * quizzes. The more recent the quiz, the harder the penalty; older quizzes
+     * decay back toward 1.0 (no penalty).
+     *
+     * @return array<string,float>
+     */
+    private function recentlyTestedPenalties(int $lookback = 3): array
+    {
+        $quizIds = Quiz::where('user_id', auth()->id())
+            ->orderByDesc('id')
+            ->limit($lookback)
+            ->pluck('id');
+
+        if ($quizIds->isEmpty()) {
+            return [];
+        }
+
+        // index 0 = most recent quiz; absent index -> lightest penalty
+        $factors = [0.15, 0.35, 0.6];
+
+        $penalties = [];
+        foreach ($quizIds->values() as $i => $id) {
+            $factor = $factors[$i] ?? 0.6;
+            $words = QuizQuestion::where('quiz_id', $id)
+                ->whereNotNull('word')
+                ->pluck('word');
+            foreach ($words as $word) {
+                $word = strtolower(trim($word));
+                if ($word === '') {
+                    continue;
+                }
+                // a word in several recent quizzes keeps the strongest penalty
+                if (! isset($penalties[$word]) || $factor < $penalties[$word]) {
+                    $penalties[$word] = $factor;
+                }
+            }
+        }
+
+        return $penalties;
     }
 
     /**
