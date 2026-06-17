@@ -97,12 +97,13 @@ seed list, the dictionary API, or AI-generated new words.
 |---------------|-------------|------------------------------------------------|
 | `user_id`     | FK→users    | owner, `cascadeOnDelete`                        |
 | `title`       | string(200) | e.g. "Part 5 Grammar Quiz · 06/04 14:30"       |
-| `type`        | string(20)  | `vocab_mc`\|`part5_grammar`\|`fill_blank`      |
-| `scope`       | string(10)  | `builtin`\|`custom`\|`mixed`                    |
+| `type`        | string(20)  | `vocab_mc`\|`part5_grammar`\|`fill_blank`\|`news_reading` |
+| `scope`       | string(10)  | `builtin`\|`custom`\|`mixed`\|`news`            |
 | `status`      | string(20)  | `pending`\|`completed`                          |
 | `score`       | tinyint     | correct count, nullable                         |
 | `total`       | tinyint     | question count                                  |
 | `ai_review`   | json        | `{summary, weaknesses, review_words[], review_grammar[]}` |
+| `article`     | json        | news quizzes only: `{source, topic, title, url, published_at, passage, level, suitable, suitability_note, summary, vocab[]}` |
 | `completed_at`| timestamp   | set on submit                                   |
 
 #### `quiz_questions`
@@ -225,6 +226,29 @@ boost). Drives all dashboard stats and adaptive grammar selection.
   library (`source=quiz_new`, due today).
 - **FR-22** Empty generation ⇒ error banner, no quiz created.
 
+### 3.4a News-reading quiz (`QuizController::storeNews`, `NewsService`, `ClaudeService::generateNewsQuiz`)
+- **FR-22a** `POST /quiz` with `type=news_reading` and an optional `topic`
+  (`top`\|`world`\|`business`\|`technology`) builds a reading quiz from a recent
+  BBC article. Requires an API key (else error banner, like other AI quizzes).
+- **FR-22b** `NewsService::pickArticle()` reads the topic's BBC RSS feed, skips
+  articles the user already did (matched against recent `news_reading` quizzes'
+  `article.url`), and attaches a **reading passage**: best-effort full text
+  scraped from the article page (`<p>` extraction, capped ~1800 chars), falling
+  back to the RSS summary when scraping fails or yields too little. No usable
+  article ⇒ error banner.
+- **FR-22c** A single `generateNewsQuiz(title, passage, learnerProfile)` call
+  returns, in one shot: a difficulty `level` (1–5) and a `suitable` verdict for
+  *this* learner (profile = library size + recent quiz accuracy), a Chinese
+  `suitability_note` and `summary`, ~4 reading-comprehension questions, and
+  5–8 extracted vocab words. Comprehension questions store neither `word` nor
+  `grammar_point`.
+- **FR-22d** Extracted vocab is added to the library (`addNewsVocab`): each word
+  is upserted into the shared `words` cache **without clobbering** a richer
+  existing entry, then added to `user_words` with `source=news` and
+  `next_review_at=today` (idempotent) — so it immediately enters the SM-2 review
+  queue and weak-word quizzes. The difficulty verdict is shown but never blocks
+  generation; the create form offers picking another article.
+
 ### 3.5 Taking & grading (`QuizController`)
 - **FR-23** `GET /quiz/{quiz}` shows the quiz; a completed quiz redirects to
   review.
@@ -234,6 +258,9 @@ boost). Drives all dashboard stats and adaptive grammar selection.
     `demote(word, 'quiz_weak')`.
   - grammar: write a `review_log` with `quality = correct ? 5 : 1` and the
     `grammar_point` (+ denormalized category/POS if the word exists in `words`).
+  - news comprehension (no `word`, no `grammar_point`): counts toward `score`
+    only — **no** `review_log` (it has no category/POS/grammar dimension and
+    would otherwise pollute the weakness stats).
 - **FR-25** Save `score`, `status=completed`, `completed_at`, then redirect to
   review.
 
@@ -248,6 +275,10 @@ boost). Drives all dashboard stats and adaptive grammar selection.
   label) and recorded as `review_log` rows with `quality=1`
   (`boostGrammar`), nudging the adaptive selector. These decay naturally as the
   point is later answered correctly.
+- **FR-28a** **News quizzes** get comprehension-focused feedback
+  (`reviewNewsQuiz`) and return empty `review_words`/`review_grammar`: their
+  vocab loop already closed at creation (FR-22d), and comprehension questions
+  map to no vocab word or grammar point.
 
 ### 3.7 Dashboard (`DashboardController`)
 - **FR-29** Cards: total words, due today, completed quizzes, average accuracy.
@@ -332,7 +363,11 @@ Human/Chinese labels are mapped in the dashboard and in
     `{word: sentence}` map (≤4096 tokens). Backs the
     `words:backfill-examples` command and the on-the-fly card fallback.
   - `generateQuiz(items, type)` — vocab/Part 5/fill-blank questions (≤4096).
-  - `reviewQuiz(quiz)` — summary, weaknesses, review words/grammar (≤2048).
+  - `generateNewsQuiz(title, passage, profile)` — difficulty verdict + ~4
+    comprehension questions + 5–8 extracted words, in one call (≤4096).
+  - `reviewQuiz(quiz)` — summary, weaknesses, review words/grammar (≤2048);
+    delegates to `reviewNewsQuiz()` for news quizzes (comprehension feedback,
+    empty review words/grammar).
 - **Output contract**: every prompt demands **JSON only**. `extractJson()`
   strips ```` ```json ```` fences, attempts a direct decode, then falls back to
   slicing from the first `{`/`[` to the last `}`/`]`. Failures are logged and
@@ -355,6 +390,14 @@ Human/Chinese labels are mapped in the dashboard and in
 - `GET {DICTIONARY_API_URL}/{term}`, 15s timeout, no key required. Non-200 or
   malformed responses return the cached word (possibly `null`).
 
+### 5.3 BBC News RSS (`NewsService`)
+- Reads public BBC RSS feeds (`services.news.feeds`, keyed by topic), 15s
+  timeout, **no key required**, browser-like `User-Agent`
+  (`services.news.user_agent`). `recentArticles()` parses RSS items via
+  SimpleXML; `fetchPassage()` best-effort scrapes article `<p>` text. All
+  network/parse failures are caught + logged and degrade to an empty list / RSS
+  summary, so a flaky feed never 500s the request.
+
 ---
 
 ## 6. Configuration
@@ -364,10 +407,12 @@ Human/Chinese labels are mapped in the dashboard and in
 | `ANTHROPIC_API_KEY`  | for AI   | —                                                 |
 | `ANTHROPIC_MODEL`    | no       | `claude-sonnet-4-6`                               |
 | `DICTIONARY_API_URL` | no       | `https://api.dictionaryapi.dev/api/v2/entries/en` |
+| `NEWS_FEED_*`        | no       | BBC RSS per topic (`TOP`/`WORLD`/`BUSINESS`/`TECHNOLOGY`) |
+| `NEWS_USER_AGENT`    | no       | browser-like UA for fetching RSS/articles         |
 | `DB_*`               | yes      | MySQL (Docker) / SQLite (local)                   |
 
-Config keys live in `config/services.php` under `anthropic.*` and
-`dictionary.url`.
+Config keys live in `config/services.php` under `anthropic.*`,
+`dictionary.url`, and `news.*`.
 
 ---
 

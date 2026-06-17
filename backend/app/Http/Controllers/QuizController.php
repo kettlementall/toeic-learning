@@ -8,6 +8,7 @@ use App\Models\UserWord;
 use App\Models\Word;
 use App\Services\ClaudeService;
 use App\Services\DictionaryService;
+use App\Services\NewsService;
 use App\Services\QuizBuilderService;
 use App\Services\SpacedRepetitionService;
 use Illuminate\Http\Request;
@@ -20,6 +21,7 @@ class QuizController extends Controller
         private QuizBuilderService $builder,
         private SpacedRepetitionService $srs,
         private DictionaryService $dictionary,
+        private NewsService $news,
     ) {
     }
 
@@ -34,16 +36,21 @@ class QuizController extends Controller
     public function store(Request $request)
     {
         $data = $request->validate([
-            'type' => 'required|in:vocab_mc,part5_grammar,fill_blank',
-            'mode' => 'required|string',
-            'count' => 'required|integer|min:1|max:20',
+            'type' => 'required|in:vocab_mc,part5_grammar,fill_blank,news_reading',
+            'mode' => 'required_unless:type,news_reading|string',
+            'count' => 'required_unless:type,news_reading|integer|min:1|max:20',
             'category' => 'nullable|string|max:50',
             'level' => 'nullable|integer|min:1|max:5',
             'points' => 'nullable|array',
+            'topic' => 'nullable|string|max:30',
         ]);
 
         if (! $this->claude->hasKey()) {
             return back()->with('error', 'ANTHROPIC_API_KEY is not set, so AI quiz generation is unavailable. Add your key to backend/.env and restart.');
+        }
+
+        if ($data['type'] === 'news_reading') {
+            return $this->storeNews($data['topic'] ?? 'top');
         }
 
         $count = (int) $data['count'];
@@ -101,6 +108,86 @@ class QuizController extends Controller
         return redirect()->route('quiz.show', $quiz);
     }
 
+    /**
+     * Build a BBC news-reading quiz: fetch a recent article, let the AI judge
+     * its difficulty for this learner, generate comprehension questions, and
+     * add the AI-extracted vocab to the learner's library.
+     */
+    private function storeNews(string $topic)
+    {
+        if (! array_key_exists($topic, $this->news->feeds())) {
+            $topic = 'top';
+        }
+
+        // avoid re-serving articles this user already read recently
+        $recentUrls = Quiz::where('user_id', auth()->id())
+            ->where('type', 'news_reading')
+            ->orderByDesc('id')
+            ->limit(20)
+            ->pluck('article')
+            ->map(fn ($a) => is_array($a) ? ($a['url'] ?? null) : null)
+            ->filter()
+            ->all();
+
+        $article = $this->news->pickArticle($topic, $recentUrls);
+        if (! $article) {
+            return back()->with('error', 'Could not fetch a suitable BBC article right now. Please try again or pick another topic.');
+        }
+
+        $generated = $this->claude->generateNewsQuiz(
+            $article['title'],
+            $article['passage'],
+            $this->learnerProfile(),
+        );
+
+        $questions = $generated['questions'] ?? [];
+        if (empty($questions)) {
+            return back()->with('error', 'AI failed to generate questions for this article. Please try again.');
+        }
+
+        $quiz = Quiz::create([
+            'user_id' => auth()->id(),
+            'title' => 'News Reading · ' . \Illuminate\Support\Str::limit($article['title'], 60) . ' · ' . now()->format('m/d H:i'),
+            'type' => 'news_reading',
+            'scope' => 'news',
+            'status' => 'pending',
+            'total' => count($questions),
+            'article' => [
+                'source' => 'BBC',
+                'topic' => $topic,
+                'title' => $article['title'],
+                'url' => $article['url'],
+                'published_at' => $article['published_at'] ?? null,
+                'passage' => $article['passage'],
+                'level' => $generated['level'] ?? null,
+                'suitable' => $generated['suitable'] ?? null,
+                'suitability_note' => $generated['suitability_note'] ?? null,
+                'summary' => $generated['summary'] ?? null,
+                'vocab' => array_values(array_filter(array_map(
+                    fn ($v) => is_array($v) && ! empty($v['word']) ? trim(strtolower($v['word'])) : null,
+                    $generated['vocab'] ?? []
+                ))),
+            ],
+        ]);
+
+        foreach ($questions as $g) {
+            if (empty($g['question']) || empty($g['options'])) {
+                continue;
+            }
+            $quiz->questions()->create([
+                'question' => $g['question'],
+                'options' => array_values($g['options']),
+                'correct_answer' => strtoupper((string) ($g['correct_answer'] ?? 'A')),
+                'explanation' => $g['explanation'] ?? null,
+            ]);
+        }
+        $quiz->update(['total' => $quiz->questions()->count()]);
+
+        $this->addNewsVocab($generated['vocab'] ?? []);
+
+        return redirect()->route('quiz.show', $quiz);
+    }
+
     public function show(Quiz $quiz)
     {
         $this->authorizeOwner($quiz);
@@ -140,10 +227,13 @@ class QuizController extends Controller
                 } else {
                     $this->srs->demote($q->word, 'quiz_weak');
                 }
-            } else {
+            } elseif ($q->grammar_point) {
                 // grammar (Part 5) question -> log grammar_point + quality for adaptive stats
                 $this->logQuestion($quiz, $q, $correct);
             }
+            // news-reading comprehension questions have neither word nor
+            // grammar_point: they only count toward the score, and would
+            // otherwise write null-dimension review_logs that pollute stats.
         }
 
         $quiz->update([
@@ -264,6 +354,73 @@ class QuizController extends Controller
         ]);
     }
 
+    /**
+     * A compact snapshot of the learner used to size article difficulty:
+     * library size + recent quiz accuracy (percent, null if no completed quizzes).
+     */
+    private function learnerProfile(): array
+    {
+        $vocabCount = UserWord::forUser()->count();
+
+        $recent = Quiz::where('user_id', auth()->id())
+            ->where('status', 'completed')
+            ->where('total', '>', 0)
+            ->orderByDesc('id')
+            ->limit(10)
+            ->get(['score', 'total']);
+
+        $accuracy = null;
+        if ($recent->isNotEmpty()) {
+            $accuracy = (int) round(
+                $recent->sum('score') / max(1, $recent->sum('total')) * 100
+            );
+        }
+
+        return ['vocab_count' => $vocabCount, 'accuracy' => $accuracy];
+    }
+
+    /**
+     * Persist AI-extracted article words into the shared words cache and add
+     * them to the learner's library (source=news, due today). Mirrors
+     * QuizBuilderService::newWords() + ensureInLibrary().
+     *
+     * @param  array  $vocab  list of ['word','part_of_speech','definition_zh','example']
+     */
+    private function addNewsVocab(array $vocab): void
+    {
+        foreach ($vocab as $v) {
+            if (! is_array($v) || empty($v['word'])) {
+                continue;
+            }
+            $word = trim(strtolower($v['word']));
+            if ($word === '' || ! preg_match('/^[a-z][a-z\- ]*$/', $word)) {
+                continue; // skip junk / non-words
+            }
+
+            // upsert into the shared cache, but never clobber a richer existing
+            // entry (e.g. a seed word) — only fill blanks and keep its source.
+            $dict = Word::firstOrNew(['word' => $word]);
+            if (! $dict->exists) {
+                $dict->source = 'api';
+            }
+            $dict->part_of_speech ??= $v['part_of_speech'] ?? null;
+            $dict->definition_zh ??= $v['definition_zh'] ?? null;
+            $dict->example ??= $v['example'] ?? null;
+            $dict->save();
+
+            if (UserWord::forUser()->where('word', $word)->exists()) {
+                continue;
+            }
+            UserWord::create([
+                'user_id' => auth()->id(),
+                'word_id' => $dict->id,
+                'word' => $word,
+                'source' => 'news',
+                'next_review_at' => Carbon::today(),
+            ]);
+        }
+    }
+
     private function ensureInLibrary(string $word): void
     {
         $word = trim(strtolower($word));
@@ -291,6 +448,7 @@ class QuizController extends Controller
         return match ($type) {
             'part5_grammar' => 'Part 5 Grammar Quiz',
             'fill_blank' => 'Sentence Fill-in-the-Blank Quiz',
+            'news_reading' => 'News Reading Quiz',
             default => 'Vocabulary Multiple Choice Quiz',
         };
     }

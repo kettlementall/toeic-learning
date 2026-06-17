@@ -6,6 +6,23 @@
     <h1 class="text-2xl font-bold mb-1">{{ $quiz->title }}</h1>
     <p class="text-sm text-slate-500 mb-5">{{ $quiz->total }} questions in total. Submit your answers and the AI will review them for you.</p>
 
+    @if ($quiz->article)
+        @php $a = $quiz->article; @endphp
+        <div class="bg-white rounded-xl border p-5 mb-5">
+            <div class="flex items-start justify-between gap-3 mb-2">
+                <a href="{{ $a['url'] }}" target="_blank" rel="noopener" class="font-semibold text-indigo-700 hover:underline">{{ $a['title'] }}</a>
+                <span class="shrink-0 text-xs text-slate-400">{{ $a['source'] ?? 'BBC' }}</span>
+            </div>
+            @if (!empty($a['suitability_note']))
+                <div class="mb-3 rounded-lg px-3 py-2 text-sm {{ ($a['suitable'] ?? true) ? 'bg-emerald-50 border border-emerald-200 text-emerald-800' : 'bg-amber-50 border border-amber-200 text-amber-800' }}">
+                    <span class="font-medium">Difficulty {{ $a['level'] ?? '?' }}/5 · {{ ($a['suitable'] ?? true) ? 'A good fit' : 'A stretch' }}:</span>
+                    {{ $a['suitability_note'] }}
+                </div>
+            @endif
+            <div class="text-sm text-slate-700 leading-relaxed whitespace-pre-line">{{ $a['passage'] }}</div>
+        </div>
+    @endif
+
     <form method="post" action="{{ route('quiz.submit', $quiz) }}" @submit="submitting = true">
         @csrf
         <div class="space-y-5">

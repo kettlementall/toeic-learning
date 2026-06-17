@@ -11,7 +11,7 @@
     ];
 @endphp
 
-<div class="max-w-xl mx-auto" x-data="{ type: 'vocab_mc', mode: 'smart', submitting: false }">
+<div class="max-w-xl mx-auto" x-data="{ type: 'vocab_mc', mode: 'smart', topic: 'top', submitting: false }">
     <h1 class="text-2xl font-bold mb-1">Create Quiz</h1>
     <p class="text-sm text-slate-500 mb-5">The AI generates questions targeting your weak points and can mix in new words.</p>
 
@@ -26,7 +26,7 @@
 
         <div>
             <label class="block text-sm font-semibold mb-2">Question Type</label>
-            <div class="grid grid-cols-3 gap-2">
+            <div class="grid grid-cols-2 gap-2">
                 <label class="cursor-pointer">
                     <input type="radio" name="type" value="vocab_mc" x-model="type" class="peer hidden">
                     <div class="text-center text-sm py-2 rounded-lg border peer-checked:bg-indigo-600 peer-checked:text-white peer-checked:border-indigo-600">Vocabulary MC</div>
@@ -39,11 +39,15 @@
                     <input type="radio" name="type" value="fill_blank" x-model="type" class="peer hidden">
                     <div class="text-center text-sm py-2 rounded-lg border peer-checked:bg-indigo-600 peer-checked:text-white peer-checked:border-indigo-600">Fill in the Blank</div>
                 </label>
+                <label class="cursor-pointer">
+                    <input type="radio" name="type" value="news_reading" x-model="type" class="peer hidden">
+                    <div class="text-center text-sm py-2 rounded-lg border peer-checked:bg-indigo-600 peer-checked:text-white peer-checked:border-indigo-600">News Reading (BBC)</div>
+                </label>
             </div>
         </div>
 
         {{-- vocab / fill_blank mode --}}
-        <div x-show="type !== 'part5_grammar'">
+        <div x-show="type === 'vocab_mc' || type === 'fill_blank'" x-cloak>
             <label class="block text-sm font-semibold mb-2">Question Strategy</label>
             <div class="space-y-1.5 text-sm">
                 <label class="flex items-center gap-2"><input type="radio" name="mode" value="smart" x-model="mode"> Smart mix (70% weak points + 30% new words)</label>
@@ -66,7 +70,18 @@
             </div>
         </div>
 
-        <div>
+        {{-- news reading topic --}}
+        <div x-show="type === 'news_reading'" x-cloak>
+            <label class="block text-sm font-semibold mb-2">News Topic</label>
+            <p class="text-xs text-slate-500 mb-2">The AI picks a recent BBC article, judges whether its difficulty fits you, writes ~4 reading questions, and adds useful words to your library.</p>
+            <div class="grid grid-cols-2 gap-1.5 text-sm">
+                @foreach (['top' => 'Top Stories', 'world' => 'World', 'business' => 'Business', 'technology' => 'Technology'] as $val => $label)
+                    <label class="flex items-center gap-2"><input type="radio" name="topic" value="{{ $val }}" x-model="topic"> {{ $label }}</label>
+                @endforeach
+            </div>
+        </div>
+
+        <div x-show="type !== 'news_reading'" x-cloak>
             <label class="block text-sm font-semibold mb-2">Number of Questions</label>
             <select name="count" class="rounded-lg border px-3 py-2 text-sm">
                 @foreach ([5, 8, 10, 15, 20] as $c)

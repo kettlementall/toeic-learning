@@ -9,11 +9,12 @@ class Quiz extends Model
 {
     protected $fillable = [
         'user_id', 'title', 'type', 'scope', 'status', 'score', 'total',
-        'ai_review', 'completed_at',
+        'ai_review', 'article', 'completed_at',
     ];
 
     protected $casts = [
         'ai_review' => 'array',
+        'article' => 'array',
         'completed_at' => 'datetime',
         'score' => 'integer',
         'total' => 'integer',

@@ -46,4 +46,16 @@ return [
         'url' => env('DICTIONARY_API_URL', 'https://api.dictionaryapi.dev/api/v2/entries/en'),
     ],
 
+    'news' => [
+        // BBC RSS feeds keyed by topic. No API key required.
+        'feeds' => [
+            'top' => env('NEWS_FEED_TOP', 'https://feeds.bbci.co.uk/news/rss.xml'),
+            'world' => env('NEWS_FEED_WORLD', 'https://feeds.bbci.co.uk/news/world/rss.xml'),
+            'business' => env('NEWS_FEED_BUSINESS', 'https://feeds.bbci.co.uk/news/business/rss.xml'),
+            'technology' => env('NEWS_FEED_TECHNOLOGY', 'https://feeds.bbci.co.uk/news/technology/rss.xml'),
+        ],
+        // Some sites reject requests without a browser-like User-Agent.
+        'user_agent' => env('NEWS_USER_AGENT', 'Mozilla/5.0 (compatible; ToeicLearningBot/1.0)'),
+    ],
+
 ];

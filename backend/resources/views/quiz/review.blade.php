@@ -25,6 +25,24 @@
         </div>
     </div>
 
+    @if ($quiz->article)
+        @php $a = $quiz->article; @endphp
+        <div class="bg-white rounded-xl border p-5 mb-5 text-sm">
+            <div class="flex items-start justify-between gap-3 mb-1">
+                <a href="{{ $a['url'] }}" target="_blank" rel="noopener" class="font-semibold text-indigo-700 hover:underline">{{ $a['title'] }}</a>
+                <span class="shrink-0 text-xs text-slate-400">{{ $a['source'] ?? 'BBC' }} · Difficulty {{ $a['level'] ?? '?' }}/5</span>
+            </div>
+            @if (!empty($a['summary']))
+                <p class="text-slate-600">{{ $a['summary'] }}</p>
+            @endif
+            @if (!empty($a['vocab']))
+                <p class="mt-3"><span class="font-semibold text-indigo-700">Words added to your library:</span>
+                    {{ implode(', ', (array) $a['vocab']) }}</p>
+                <p class="text-xs text-indigo-500">↑ Added to today's review queue.</p>
+            @endif
+        </div>
+    @endif
+
     @if (!empty($review['review_words']) || !empty($review['review_grammar']))
         <div class="bg-indigo-50 border border-indigo-200 rounded-xl p-4 mb-5 text-sm">
             @if (!empty($review['review_words']))

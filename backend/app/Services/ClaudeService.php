@@ -158,6 +158,59 @@ PROMPT;
     }
 
     /**
+     * Read a news article, judge whether its difficulty suits the learner, write
+     * ~4 reading-comprehension questions, and extract 5-8 TOEIC-worthy words.
+     *
+     * @param  array  $profile  ['vocab_count'=>int, 'accuracy'=>?int (percent)]
+     * @return array  ['level'=>int, 'suitable'=>bool, 'suitability_note'=>string,
+     *                 'summary'=>string, 'questions'=>[..], 'vocab'=>[..]]
+     */
+    public function generateNewsQuiz(string $title, string $passage, array $profile): array
+    {
+        if (! $this->hasKey() || trim($passage) === '') {
+            return [];
+        }
+
+        $vocabCount = (int) ($profile['vocab_count'] ?? 0);
+        $accuracy = $profile['accuracy'];
+        $accLine = $accuracy === null
+            ? '近期測驗正確率：尚無紀錄。'
+            : "近期測驗平均正確率：約 {$accuracy}%。";
+
+        $prompt = <<<PROMPT
+你是多益(TOEIC)英語閱讀教練。以下是一篇英文新聞，標題為「{$title}」：
+---
+{$passage}
+---
+
+學習者資料：單字庫約有 {$vocabCount} 個字。{$accLine}
+
+請完成下列任務，全部用繁體中文說明（題目與選項本身用英文），只回傳 JSON，不要其他文字：
+1. 評估這篇文章對「該學習者」的難度是否適合(1-5 級，1最易5最難)，並說明為何適合或偏難/偏易。
+2. 出 4 題針對本文的英文閱讀理解選擇題(4選1)，測驗主旨、細節、推論或字義。
+3. 從文章挑出 5-8 個適合該學習者學習的多益實用單字(實詞為主，避免過於簡單或專有名詞)，附詞性、繁中翻譯、以及一句取自或貼近文章情境的英文例句。
+
+JSON 格式如下：
+{
+  "level": 3,
+  "suitable": true,
+  "suitability_note": "難度評語(繁體中文，2-3句)",
+  "summary": "文章重點摘要(繁體中文，2-3句)",
+  "questions": [
+    {"question":"英文題目", "options":["A選項","B選項","C選項","D選項"], "correct_answer":"A", "explanation":"繁體中文解析"}
+  ],
+  "vocab": [
+    {"word":"english", "part_of_speech":"noun/verb/adjective/adverb", "definition_zh":"繁體中文翻譯", "example":"一句英文例句"}
+  ]
+}
+PROMPT;
+
+        $json = $this->callJson($prompt, 4096);
+
+        return is_array($json) ? $json : [];
+    }
+
+    /**
      * Analyze a completed quiz and return overall feedback + weak words.
      * Returns ['summary'=>string, 'weaknesses'=>string, 'review_words'=>[..], 'review_grammar'=>[..]].
      */
@@ -170,6 +223,13 @@ PROMPT;
                 'review_words' => [],
                 'review_grammar' => [],
             ];
+        }
+
+        // News-reading quizzes adapt through the extracted vocab (already added to
+        // the library at creation), not the vocab/grammar feedback loop, so they
+        // get comprehension-focused feedback and empty review_words/grammar.
+        if ($quiz->type === 'news_reading') {
+            return $this->reviewNewsQuiz($quiz);
         }
 
         $lines = [];
@@ -211,6 +271,59 @@ PROMPT;
             'review_words' => [],
             'review_grammar' => [],
         ];
+    }
+
+    /**
+     * Comprehension-focused feedback for a completed news-reading quiz.
+     */
+    private function reviewNewsQuiz(Quiz $quiz): array
+    {
+        $article = $quiz->article ?? [];
+        $title = $article['title'] ?? '';
+        $summary = $article['summary'] ?? '';
+
+        $lines = [];
+        foreach ($quiz->questions as $q) {
+            $mark = $q->is_correct ? '✓正確' : '✗錯誤';
+            $lines[] = "[{$mark}] 題目:{$q->question} | 你的答案:{$q->user_answer} | 正解:{$q->correct_answer}";
+        }
+        $detail = implode("\n", $lines);
+
+        $prompt = <<<PROMPT
+你是多益(TOEIC)閱讀教練。學生剛完成一篇新聞「{$title}」的閱讀理解測驗（得分 {$quiz->score}/{$quiz->total}）。
+文章重點：{$summary}
+作答結果：
+{$detail}
+
+請用繁體中文針對「閱讀理解能力」給回饋，只回傳 JSON，不要其他文字：
+{
+  "summary": "整體閱讀表現總評(2-3句)",
+  "weaknesses": "弱點分析(主旨/細節/推論/字義何者較弱，及閱讀建議)",
+  "review_words": [],
+  "review_grammar": []
+}
+PROMPT;
+
+        $json = $this->callJson($prompt, 2048);
+
+        if (! is_array($json)) {
+            return [
+                'summary' => 'AI 檢討產生失敗，請稍後再試。',
+                'weaknesses' => '',
+                'review_words' => [],
+                'review_grammar' => [],
+            ];
+        }
+
+        // The model often ignores the "return []" instruction and emits rich
+        // review_words/review_grammar (sometimes as objects). News quizzes close
+        // their vocab loop at creation, so force these empty — both to honor the
+        // design contract and to keep review.blade's implode() from choking on
+        // non-string elements.
+        $json['review_words'] = [];
+        $json['review_grammar'] = [];
+
+        return $json;
     }
 
     // ---------- prompt builders ----------
