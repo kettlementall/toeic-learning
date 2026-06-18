@@ -42,7 +42,6 @@ class QuizBuilderService
     private function smartMix(int $n, array $opts): array
     {
         $reviewN = (int) ceil($n * 0.7);
-        $newN = $n - $reviewN;
 
         $review = $this->weakWords($reviewN);
 
@@ -57,7 +56,9 @@ class QuizBuilderService
             $review = array_merge($review, $more);
         }
 
-        $newWords = $this->newWords($n - count($review) + $newN, $opts);
+        // fill the remainder with new words (~30% when review is full; more if the
+        // library was too small to fill the review portion).
+        $newWords = $this->newWords($n - count($review), $opts);
 
         $all = array_values(array_unique(array_merge($review, $newWords)));
 

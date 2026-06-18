@@ -98,6 +98,13 @@ XML;
         $this->assertCount(4, $quiz->questions);
         $this->assertNull($quiz->questions->first()->word);
 
+        // options are shuffled at save, but correct_answer must still point at the
+        // option the AI marked correct ("Option A" in the fake response)
+        foreach ($quiz->questions as $q) {
+            $idx = ord($q->correct_answer) - 65;
+            $this->assertSame('Option A', $q->options[$idx]);
+        }
+
         // 2. extracted vocab joined the library (source=news, due today) + cache
         $this->assertDatabaseHas('user_words', [
             'user_id' => $user->id, 'word' => 'revenue', 'source' => 'news',
@@ -107,10 +114,14 @@ XML;
         $this->assertTrue(Word::where('word', 'resilient')->exists());
         $this->assertSame(5, UserWord::where('user_id', $user->id)->where('source', 'news')->count());
 
-        // 3. submit -> graded & completed; comprehension questions write no review_logs
+        // 3. submit -> graded & completed; comprehension questions write no review_logs.
+        // Options are shuffled at save, so answer from each stored correct_answer:
+        // first question correct, the rest deliberately wrong.
         $answers = [];
-        foreach ($quiz->questions as $i => $q) {
-            $answers[$q->id] = $i === 0 ? 'A' : 'B'; // first correct, rest wrong
+        foreach ($quiz->questions->values() as $i => $q) {
+            $answers[$q->id] = $i === 0
+                ? $q->correct_answer
+                : ($q->correct_answer === 'A' ? 'B' : 'A');
         }
         $this->post("/quiz/{$quiz->id}/submit", ['answers' => $answers])
             ->assertRedirect(route('quiz.review', $quiz));

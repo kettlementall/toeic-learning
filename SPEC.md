@@ -221,7 +221,11 @@ boost). Drives all dashboard stats and adaptive grammar selection.
   (adaptive or specific, §4.3); Claude generates one question per code.
 - **FR-20** Persist a `Quiz` (`status=pending`) and its valid `QuizQuestion`s
   (skipping any without `question`/`options`); `correct_answer` uppercased;
-  `total` corrected to the actual stored count.
+  `total` corrected to the actual stored count. Each question's options are
+  **shuffled** at save and the correct letter remapped (`shuffleOptions`), so
+  the answer isn't biased toward a fixed position (LLMs favor "A"); prompts
+  therefore explain by option content, not letter. Applies to all generated
+  quiz types (vocab/Part 5/fill-blank/news).
 - **FR-21** Any new `word` referenced by a question is ensured present in the
   library (`source=quiz_new`, due today).
 - **FR-22** Empty generation ⇒ error banner, no quiz created.

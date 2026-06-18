@@ -87,12 +87,16 @@ class QuizController extends Controller
             if (empty($g['question']) || empty($g['options'])) {
                 continue;
             }
+            [$options, $correct] = $this->shuffleOptions(
+                array_values($g['options']),
+                strtoupper((string) ($g['correct_answer'] ?? 'A')),
+            );
             $quiz->questions()->create([
                 'word' => $g['word'] ?? null,
                 'grammar_point' => $g['grammar_point'] ?? null,
                 'question' => $g['question'],
-                'options' => array_values($g['options']),
-                'correct_answer' => strtoupper((string) ($g['correct_answer'] ?? 'A')),
+                'options' => $options,
+                'correct_answer' => $correct,
                 'explanation' => $g['explanation'] ?? null,
             ]);
 
@@ -174,10 +178,14 @@ class QuizController extends Controller
             if (empty($g['question']) || empty($g['options'])) {
                 continue;
             }
+            [$options, $correct] = $this->shuffleOptions(
+                array_values($g['options']),
+                strtoupper((string) ($g['correct_answer'] ?? 'A')),
+            );
             $quiz->questions()->create([
                 'question' => $g['question'],
-                'options' => array_values($g['options']),
-                'correct_answer' => strtoupper((string) ($g['correct_answer'] ?? 'A')),
+                'options' => $options,
+                'correct_answer' => $correct,
                 'explanation' => $g['explanation'] ?? null,
             ]);
         }
@@ -451,5 +459,28 @@ class QuizController extends Controller
             'news_reading' => 'News Reading Quiz',
             default => 'Vocabulary Multiple Choice Quiz',
         };
+    }
+
+    /**
+     * Shuffle a question's options and remap the correct-answer letter, so the
+     * correct choice isn't biased toward a fixed position (LLMs tend to put it
+     * at "A"). Prompts are told to explain by option content, not letter, so
+     * explanations stay valid after the shuffle.
+     *
+     * @param  string[]  $options  ordered option strings
+     * @param  string    $correct  original correct letter (A–D)
+     * @return array{0: string[], 1: string}  [shuffled options, new correct letter]
+     */
+    private function shuffleOptions(array $options, string $correct): array
+    {
+        $options = array_values($options);
+        $idx = ord($correct) - 65; // 'A' => 0
+        $correctText = $options[$idx] ?? ($options[0] ?? null);
+
+        shuffle($options);
+
+        $newIdx = array_search($correctText, $options, true);
+
+        return [$options, chr(65 + ($newIdx === false ? 0 : $newIdx))];
     }
 }
