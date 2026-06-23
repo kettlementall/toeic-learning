@@ -80,6 +80,16 @@
                 <template x-if="result.toeic_note">
                     <div><dt class="font-semibold text-slate-500">TOEIC Usage</dt><dd class="mt-0.5 text-indigo-700" x-text="result.toeic_note"></dd></div>
                 </template>
+                <div>
+                    <dt class="font-semibold text-slate-500">記憶小技巧</dt>
+                    <dd class="mt-0.5">
+                        <span x-show="result.mnemonic" x-cloak class="text-amber-700">💡 <span x-text="result.mnemonic"></span></span>
+                        <button x-show="!result.mnemonic && !mnemonicTried" @click="genMnemonic()" :disabled="mnemonicLoading"
+                                class="text-xs text-indigo-500 hover:underline disabled:opacity-50"
+                                x-text="mnemonicLoading ? 'Generating…' : '✨ 產生記憶小技巧'"></button>
+                        <span x-show="!result.mnemonic && mnemonicTried" x-cloak class="text-xs text-slate-300">No mnemonic available</span>
+                    </dd>
+                </div>
                 <template x-if="result.synonyms">
                     <div><dt class="font-semibold text-slate-500">Synonyms</dt><dd class="mt-0.5 text-slate-600" x-text="result.synonyms"></dd></div>
                 </template>
@@ -93,9 +103,11 @@
 function wordSearch() {
     return {
         term: '', loading: false, error: '', result: null, added: false,
+        mnemonicLoading: false, mnemonicTried: false,
         async search() {
             if (!this.term.trim()) return;
             this.loading = true; this.error = ''; this.result = null;
+            this.mnemonicLoading = false; this.mnemonicTried = false;
             try {
                 const res = await fetch(`{{ route('words.lookup') }}?q=` + encodeURIComponent(this.term.trim()));
                 const data = await res.json();
@@ -103,6 +115,16 @@ function wordSearch() {
                 else { this.result = data.word; this.added = data.added; }
             } catch (e) { this.error = 'Network error. Please try again later.'; }
             this.loading = false;
+        },
+        async genMnemonic() {
+            if (!this.result) return;
+            this.mnemonicLoading = true;
+            try {
+                const r = await fetch(`{{ route('words.mnemonic') }}?q=` + encodeURIComponent(this.result.word));
+                const d = await r.json();
+                if (d.mnemonic) this.result.mnemonic = d.mnemonic;
+            } catch (e) {}
+            this.mnemonicTried = true; this.mnemonicLoading = false;
         },
         playAudio() {
             // real recording if the dictionary had one, else browser text-to-speech
@@ -114,6 +136,7 @@ function wordSearch() {
         },
         clear() {
             this.term = ''; this.error = ''; this.result = null; this.added = false;
+            this.mnemonicLoading = false; this.mnemonicTried = false;
             this.$nextTick(() => this.$root.querySelector('input[type=text]')?.focus());
         }
     }

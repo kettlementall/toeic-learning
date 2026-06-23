@@ -10,7 +10,7 @@ class Word extends Model
     protected $fillable = [
         'word', 'phonetic', 'audio_url', 'part_of_speech',
         'definition_en', 'definition_zh', 'meanings', 'example', 'toeic_note',
-        'synonyms', 'level', 'category', 'source', 'raw_json',
+        'mnemonic', 'synonyms', 'level', 'category', 'source', 'raw_json',
     ];
 
     protected $casts = [

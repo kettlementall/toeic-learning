@@ -44,9 +44,9 @@ class ClaudeService
         $prompt = <<<PROMPT
 你是多益(TOEIC)英語教學專家。針對單字 "{$word}" 的各詞性英文釋義如下：
 {$list}
-請「依相同順序、相同數量」為每一條提供簡潔的繁體中文翻譯，並給整體一句多益用法提示。
+請「依相同順序、相同數量」為每一條提供簡潔的繁體中文翻譯，給整體一句多益用法提示，並給一句幫助記憶的小技巧。
 只回傳 JSON，不要其他文字，格式如下：
-{"meanings": [{"definition_zh": "第1條的中文翻譯"}], "toeic_note": "多益常見搭配詞或用法提示(繁體中文，30字內)"}
+{"meanings": [{"definition_zh": "第1條的中文翻譯"}], "toeic_note": "多益常見搭配詞或用法提示(繁體中文，30字內)", "mnemonic": "記憶小技巧(繁體中文，諧音/字根字首/拆字/聯想擇一，須與字義相關，30字內)"}
 PROMPT;
 
         $json = $this->callJson($prompt, 1024);
@@ -70,7 +70,7 @@ PROMPT;
         $prompt = <<<PROMPT
 請列出 {$n} 個多益(TOEIC)常考英文單字。{$levelHint}{$catHint}
 只回傳 JSON 陣列，每個物件格式如下，不要其他文字：
-[{"word":"english", "part_of_speech":"noun/verb/adjective/adverb", "definition_zh":"繁體中文翻譯", "example":"一句英文例句", "category":"business/office/finance/travel/general 等"}]
+[{"word":"english", "part_of_speech":"noun/verb/adjective/adverb", "definition_zh":"繁體中文翻譯", "example":"一句英文例句", "category":"business/office/finance/travel/general 等", "mnemonic":"記憶小技巧(繁體中文，諧音/字根字首/拆字/聯想擇一，須與字義相關，30字內)"}]
 PROMPT;
 
         $json = $this->callJson($prompt, 2048);
@@ -134,6 +134,63 @@ PROMPT;
     }
 
     /**
+     * Generate a Traditional-Chinese memory aid / mnemonic for each word
+     * (諧音/字根字首/拆字/聯想擇一). Backs the on-the-fly card button, the
+     * Daily Review reveal fallback, and the words:backfill-mnemonics command.
+     * Words acquired via lookup/quiz/news get their mnemonic folded into those
+     * existing AI calls instead.
+     *
+     * @param  array<int,array{word:string,definition_zh?:?string}>  $items
+     * @return array<string,string>  map of lowercased word => mnemonic
+     */
+    public function generateMnemonics(array $items): array
+    {
+        $items = array_values(array_filter($items, fn ($i) => ! empty($i['word'])));
+
+        if (! $this->hasKey() || empty($items)) {
+            return [];
+        }
+
+        $lines = [];
+        foreach ($items as $i) {
+            $word = trim((string) $i['word']);
+            $zh = trim((string) ($i['definition_zh'] ?? ''));
+            $lines[] = $zh !== '' ? "{$word} ({$zh})" : $word;
+        }
+        $list = implode("\n", $lines);
+
+        $prompt = <<<PROMPT
+請為以下每個英文單字各給「一句繁體中文記憶小技巧」，幫助學習者記住該單字，
+方法可用諧音、字根字首、拆字或聯想擇一，須與字義相關，每句約 30 字內：
+{$list}
+
+只回傳 JSON 物件，鍵為單字、值為對應的記憶小技巧字串，不要其他文字：
+{"word":"記憶小技巧"}
+PROMPT;
+
+        // Same malformed-JSON retry strategy as generateExamples().
+        for ($attempt = 0; $attempt < 3; $attempt++) {
+            $json = $this->callJson($prompt, 4096);
+            if (! is_array($json)) {
+                continue;
+            }
+
+            $out = [];
+            foreach ($json as $word => $mnemonic) {
+                if (is_string($word) && is_string($mnemonic) && trim($mnemonic) !== '') {
+                    $out[strtolower(trim($word))] = trim($mnemonic);
+                }
+            }
+
+            if (! empty($out)) {
+                return $out;
+            }
+        }
+
+        return [];
+    }
+
+    /**
      * Generate quiz questions.
      *
      * @param  array  $items  For vocab: list of words (strings). For part5: list of grammar_point strings.
@@ -174,8 +231,8 @@ PROMPT;
         $vocabCount = (int) ($profile['vocab_count'] ?? 0);
         $accuracy = $profile['accuracy'];
         $accLine = $accuracy === null
-            ? '近期測驗正確率：尚無紀錄。'
-            : "近期測驗平均正確率：約 {$accuracy}%。";
+            ? '近期測驗表現：尚無紀錄。'
+            : "近期測驗表現參考值：約 {$accuracy}%（僅供你內部評估難度，切勿在任何回覆文字中提及此數字）。";
 
         $prompt = <<<PROMPT
 你是多益(TOEIC)英語閱讀教練。以下是一篇英文新聞，標題為「{$title}」：
@@ -186,9 +243,9 @@ PROMPT;
 學習者資料：單字庫約有 {$vocabCount} 個字。{$accLine}
 
 請完成下列任務，全部用繁體中文說明（題目與選項本身用英文），只回傳 JSON，不要其他文字：
-1. 評估這篇文章對「該學習者」的難度是否適合(1-5 級，1最易5最難)，並說明為何適合或偏難/偏易。
+1. 評估這篇文章對「該學習者」的難度是否適合(1-5 級，1最易5最難)，並說明為何適合或偏難/偏易（評語請以文章本身的字彙、句構難度為依據，不要提及任何正確率百分比或測驗分數）。
 2. 出 4 題針對本文的英文閱讀理解選擇題(4選1)，測驗主旨、細節、推論或字義。
-3. 從文章挑出 5-8 個適合該學習者學習的多益實用單字(實詞為主，避免過於簡單或專有名詞)，附詞性、繁中翻譯、以及一句取自或貼近文章情境的英文例句。
+3. 從文章挑出 5-8 個適合該學習者學習的多益實用單字(實詞為主，避免過於簡單或專有名詞)，附詞性、繁中翻譯、一句取自或貼近文章情境的英文例句，以及一句繁體中文記憶小技巧。
 
 JSON 格式如下：
 {
@@ -200,7 +257,7 @@ JSON 格式如下：
     {"question":"英文題目", "options":["A選項","B選項","C選項","D選項"], "correct_answer":"A", "explanation":"繁體中文解析，以選項的內容文字說明，切勿使用 A/B/C/D 等選項代號(選項順序之後會被打亂)"}
   ],
   "vocab": [
-    {"word":"english", "part_of_speech":"noun/verb/adjective/adverb", "definition_zh":"繁體中文翻譯", "example":"一句英文例句"}
+    {"word":"english", "part_of_speech":"noun/verb/adjective/adverb", "definition_zh":"繁體中文翻譯", "example":"一句英文例句", "mnemonic":"記憶小技巧(繁體中文，諧音/字根字首/拆字/聯想擇一，須與字義相關，30字內)"}
   ]
 }
 PROMPT;

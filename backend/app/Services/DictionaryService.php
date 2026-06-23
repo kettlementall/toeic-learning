@@ -56,6 +56,7 @@ class DictionaryService
             'synonyms' => $dict['synonyms'] ?? null,
             'definition_zh' => $primaryZh,
             'toeic_note' => $enrich['toeic_note'] ?? null,
+            'mnemonic' => $enrich['mnemonic'] ?? ($cached->mnemonic ?? null),
             'source' => $cached?->source === 'seed' ? 'seed' : 'api',
             'raw_json' => $dict['raw'] ?? null,
         ];

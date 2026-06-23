@@ -414,6 +414,7 @@ class QuizController extends Controller
             $dict->part_of_speech ??= $v['part_of_speech'] ?? null;
             $dict->definition_zh ??= $v['definition_zh'] ?? null;
             $dict->example ??= $v['example'] ?? null;
+            $dict->mnemonic ??= $v['mnemonic'] ?? null;
             $dict->save();
 
             if (UserWord::forUser()->where('word', $word)->exists()) {

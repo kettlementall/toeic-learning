@@ -49,6 +49,34 @@ class WordController extends Controller
     }
 
     /**
+     * On-the-fly memory aid / mnemonic for a word that has none. Generates one
+     * with Claude, persists it to the words cache (so it's only generated once),
+     * and returns it as JSON. Used by the search/vocabulary card buttons and the
+     * review reveal fallback. Words acquired via lookup/quiz/news already get a
+     * mnemonic folded into those AI calls.
+     */
+    public function mnemonic(Request $request)
+    {
+        $term = trim(strtolower((string) $request->query('q', '')));
+        if ($term === '') {
+            return response()->json(['error' => 'Missing word'], 422);
+        }
+
+        $word = Word::where('word', $term)->first() ?? $this->dictionary->lookup($term);
+
+        if ($word && ! $word->mnemonic && $this->claude->hasKey()) {
+            $mnemonic = $this->claude->generateMnemonics([
+                ['word' => $word->word, 'definition_zh' => $word->definition_zh],
+            ])[$word->word] ?? null;
+            if ($mnemonic) {
+                $word->update(['mnemonic' => $mnemonic]);
+            }
+        }
+
+        return response()->json(['mnemonic' => $word?->mnemonic]);
+    }
+
+    /**
      * AJAX dictionary lookup. Auto-adds the word to the user's library.
      */
     public function lookup(Request $request)
@@ -85,6 +113,7 @@ class WordController extends Controller
                 'meanings' => $word->meanings ?? [],
                 'example' => $word->example,
                 'toeic_note' => $word->toeic_note,
+                'mnemonic' => $word->mnemonic,
                 'synonyms' => $word->synonyms,
             ],
             'added' => $created,

@@ -199,6 +199,7 @@ class QuizBuilderService
                 'part_of_speech' => $g['part_of_speech'] ?? null,
                 'definition_zh' => $g['definition_zh'] ?? null,
                 'example' => $g['example'] ?? null,
+                'mnemonic' => $g['mnemonic'] ?? null,
                 'category' => $g['category'] ?? null,
                 'source' => 'api',
                 'level' => $opts['level'] ?? 3,

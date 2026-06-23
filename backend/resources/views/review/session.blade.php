@@ -12,6 +12,7 @@
         'pos' => $uw->dictionary?->part_of_speech,
         'meanings' => $uw->dictionary?->meanings ?? [],
         'example' => $uw->dictionary?->example,
+        'mnemonic' => $uw->dictionary?->mnemonic,
         'grade_url' => route('review.grade', $uw),
     ])->values();
 @endphp
@@ -55,6 +56,8 @@
                             </div>
                         </template>
                         <p class="italic text-slate-400 mt-2" x-text="current.example || (loadingExample ? 'Generating an example…' : '')"></p>
+                        <p class="text-sm text-amber-700 mt-2" x-show="current.mnemonic || loadingMnemonic"
+                           x-text="current.mnemonic ? ('💡 ' + current.mnemonic) : (loadingMnemonic ? '💡 產生記憶小技巧中…' : '')"></p>
                     </div>
                 </template>
                 <audio x-ref="audio" :src="current.audio"></audio>
@@ -84,22 +87,36 @@
 <script>
 function reviewSession(cards) {
     return {
-        cards, index: 0, revealed: false, loadingExample: false,
+        cards, index: 0, revealed: false, loadingExample: false, loadingMnemonic: false,
         get current() { return this.cards[this.index] || {}; },
         get done() { return this.cards.length === 0 || this.index >= this.cards.length; },
         // reveal the answer; if the card has no example, generate one on the fly
         async reveal() {
             this.revealed = true;
             const c = this.cards[this.index];
-            if (!c || c.example || c._exampleTried) return;
-            c._exampleTried = true;
-            this.loadingExample = true;
-            try {
-                const r = await fetch('{{ route('words.example') }}?q=' + encodeURIComponent(c.word));
-                const data = await r.json();
-                if (data.example) c.example = data.example;
-            } catch (e) {}
-            this.loadingExample = false;
+            if (!c) return;
+            // generate an example on the fly if the card has none
+            if (!c.example && !c._exampleTried) {
+                c._exampleTried = true;
+                this.loadingExample = true;
+                try {
+                    const r = await fetch('{{ route('words.example') }}?q=' + encodeURIComponent(c.word));
+                    const data = await r.json();
+                    if (data.example) c.example = data.example;
+                } catch (e) {}
+                this.loadingExample = false;
+            }
+            // generate a mnemonic on the fly if the card has none
+            if (!c.mnemonic && !c._mnemonicTried) {
+                c._mnemonicTried = true;
+                this.loadingMnemonic = true;
+                try {
+                    const r = await fetch('{{ route('words.mnemonic') }}?q=' + encodeURIComponent(c.word));
+                    const data = await r.json();
+                    if (data.mnemonic) c.mnemonic = data.mnemonic;
+                } catch (e) {}
+                this.loadingMnemonic = false;
+            }
         },
         play() {
             if (this.current.audio && this.$refs.audio) {

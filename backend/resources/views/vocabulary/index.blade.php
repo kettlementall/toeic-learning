@@ -27,7 +27,7 @@
 @if ($words->count())
     <div class="space-y-3">
         @foreach ($words as $uw)
-            <div x-data="{ edit: false, ex: '', tried: false, loading: false, async genExample() { this.loading = true; try { const r = await fetch('{{ route('words.example') }}?q=' + encodeURIComponent(@js($uw->word))); const d = await r.json(); this.ex = d.example || ''; } catch (e) {} this.tried = true; this.loading = false; } }" class="bg-white rounded-xl border p-4">
+            <div x-data="{ edit: false, ex: '', tried: false, loading: false, mn: @js($uw->dictionary?->mnemonic ?? ''), mnTried: false, mnLoading: false, async genExample() { this.loading = true; try { const r = await fetch('{{ route('words.example') }}?q=' + encodeURIComponent(@js($uw->word))); const d = await r.json(); this.ex = d.example || ''; } catch (e) {} this.tried = true; this.loading = false; }, async genMnemonic() { this.mnLoading = true; try { const r = await fetch('{{ route('words.mnemonic') }}?q=' + encodeURIComponent(@js($uw->word))); const d = await r.json(); this.mn = d.mnemonic || ''; } catch (e) {} this.mnTried = true; this.mnLoading = false; } }" class="bg-white rounded-xl border p-4">
                 <div class="flex items-start justify-between gap-3">
                     <div class="flex-1">
                         <div class="flex items-center gap-2 flex-wrap">
@@ -68,6 +68,13 @@
                                 <p x-show="!ex && tried" x-cloak class="text-xs text-slate-300">No example available</p>
                             </div>
                         @endif
+                        <div class="mt-0.5">
+                            <p x-show="mn" x-cloak class="text-sm text-amber-700">💡 <span x-text="mn"></span></p>
+                            <button x-show="!mn && !mnTried" @click="genMnemonic()" :disabled="mnLoading"
+                                    class="text-xs text-indigo-500 hover:underline disabled:opacity-50"
+                                    x-text="mnLoading ? 'Generating…' : '✨ 產生記憶小技巧'"></button>
+                            <p x-show="!mn && mnTried" x-cloak class="text-xs text-slate-300">No mnemonic available</p>
+                        </div>
                         @if ($uw->tags)
                             <div class="mt-1 flex gap-1 flex-wrap">
                                 @foreach (explode(',', $uw->tags) as $tag)

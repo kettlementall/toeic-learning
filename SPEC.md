@@ -70,6 +70,7 @@ seed list, the dictionary API, or AI-generated new words.
 | `meanings`      | json        | `[{pos, definition_en, definition_zh, example}]` per POS |
 | `example`       | text        | primary example sentence                           |
 | `toeic_note`    | text        | AI TOEIC usage tip (Chinese)                       |
+| `mnemonic`      | text        | AI memory aid / mnemonic (Chinese), nullable       |
 | `synonyms`      | string      | comma-joined, ≤6                                   |
 | `level`         | tinyint     | difficulty 1–5, default 3                          |
 | `category`      | string(50)  | business/finance/office/travel/general/…           |
@@ -188,6 +189,19 @@ boost). Drives all dashboard stats and adaptive grammar selection.
     returns/generates a single example. The daily-review card requests it when
     the answer is revealed; each vocabulary-list card exposes a "Generate
     example" button.
+- **FR-6b** **Memory aids (mnemonics).** Every word can carry an AI-generated
+  Chinese mnemonic (`words.mnemonic`: 諧音/字根字首/拆字/聯想), generated once
+  and shared, surfaced in Word Search, My Vocabulary, and Daily Review. Words get
+  it at acquisition with **no extra AI request**: `enrich()` (lookup) returns it
+  alongside the Chinese/TOEIC note, and `generateNewWords()`/`generateNewsQuiz()`
+  return it with each generated/extracted word. Words that predate the feature or
+  arrived without one are filled two ways, both persisting to the `words` cache:
+  - **Batch** — `php artisan words:backfill-mnemonics` (`--limit`, `--chunk`,
+    `--user-id`) generates mnemonics for library words still missing one.
+  - **On the fly** — `GET /words/mnemonic?q=<term>` (`WordController::mnemonic`)
+    returns/generates a single mnemonic. The daily-review card requests it on
+    reveal; the Word Search and vocabulary-list cards expose a "產生記憶小技巧"
+    button.
 
 ### 3.2 Vocabulary library (`VocabularyController`)
 - **FR-7** `GET /vocabulary` lists `user_words` (newest first), paginated 30,
@@ -361,14 +375,19 @@ Human/Chinese labels are mapped in the dashboard and in
   `x-api-key`, `anthropic-version: 2023-06-01`. Model from
   `services.anthropic.model` (default `claude-sonnet-4-6`). 90s HTTP timeout.
 - **Calls**:
-  - `enrich(word, dictData)` — per-POS Chinese + TOEIC note (≤1024 tokens).
-  - `generateNewWords(n, level?, category?)` — fresh TOEIC words (≤2048).
+  - `enrich(word, dictData)` — per-POS Chinese + TOEIC note + mnemonic (≤1024 tokens).
+  - `generateNewWords(n, level?, category?)` — fresh TOEIC words, each with a
+    mnemonic (≤2048).
+  - `generateMnemonics(items[])` — Chinese memory aid per word, as a
+    `{word: mnemonic}` map (≤4096, retries up to 3×). Backs the
+    `words:backfill-mnemonics` command and the on-the-fly card/reveal fallback.
   - `generateExamples(words[])` — TOEIC-style example sentence per word, as a
     `{word: sentence}` map (≤4096 tokens). Backs the
     `words:backfill-examples` command and the on-the-fly card fallback.
   - `generateQuiz(items, type)` — vocab/Part 5/fill-blank questions (≤4096).
   - `generateNewsQuiz(title, passage, profile)` — difficulty verdict + ~4
-    comprehension questions + 5–8 extracted words, in one call (≤4096).
+    comprehension questions + 5–8 extracted words (each with a mnemonic), in one
+    call (≤4096).
   - `reviewQuiz(quiz)` — summary, weaknesses, review words/grammar (≤2048);
     delegates to `reviewNewsQuiz()` for news quizzes (comprehension feedback,
     empty review words/grammar).
