@@ -7,6 +7,7 @@ use App\Models\QuizQuestion;
 use App\Models\ReviewLog;
 use App\Models\UserWord;
 use App\Models\Word;
+use App\Support\Lemma;
 use Illuminate\Support\Facades\DB;
 
 class QuizBuilderService
@@ -201,33 +202,73 @@ class QuizBuilderService
 
         $ownedWords = UserWord::forUser()->pluck('word')->all();
 
-        $query = Word::whereNotIn('word', $ownedWords);
-        if (! empty($opts['category'])) {
-            $query->where('category', $opts['category']);
-        }
-        if (! empty($opts['level'])) {
-            $query->where('level', $opts['level']);
-        }
+        $filters = function ($query) use ($opts, $ownedWords) {
+            $query->whereNotIn('word', $ownedWords);
+            if (! empty($opts['category'])) {
+                $query->where('category', $opts['category']);
+            }
+            if (! empty($opts['level'])) {
+                $query->where('level', $opts['level']);
+            }
 
-        $fromSeed = $query->inRandomOrder()->limit($n)->pluck('word')->all();
+            return $query;
+        };
+
+        // The curated high-frequency list comes first, most commonly tested
+        // word first, so study time goes to the words the exam actually uses.
+        $fromSeed = $filters(Word::toeicCore())->limit($n)->pluck('word')->all();
+
+        // then anything else already cached locally
+        if (count($fromSeed) < $n) {
+            $fromSeed = array_merge($fromSeed, $filters(Word::query())
+                ->whereNotIn('word', $fromSeed)
+                ->where('source', '!=', Word::SOURCE_TOEIC_CORE)
+                ->inRandomOrder()
+                ->limit($n - count($fromSeed))
+                ->pluck('word')
+                ->all());
+        }
 
         if (count($fromSeed) >= $n) {
             return $fromSeed;
         }
 
-        // not enough -> ask Claude to generate fresh words
+        // not enough -> ask Claude to generate fresh words. The library is passed
+        // along as an exclusion list, otherwise the model returns the same common
+        // TOEIC words the user already owns and everything is filtered out below.
         $need = $n - count($fromSeed);
-        $generated = $this->claude->generateNewWords($need, $opts['level'] ?? null, $opts['category'] ?? null);
+        $generated = $this->claude->generateNewWords(
+            $need,
+            $opts['level'] ?? null,
+            $opts['category'] ?? null,
+            array_merge($ownedWords, $fromSeed),
+        );
+
+        // Inflected forms of words already owned ("offers" next to "offer") are
+        // duplicates dressed up as new material, and exact-match filtering never
+        // catches them. Derived forms ("investment" next to "invest") are kept —
+        // Part 5 tests word families, so those are worth learning separately.
+        $knownStems = Lemma::index(array_merge($ownedWords, $fromSeed));
 
         $newWords = [];
         foreach ($generated as $g) {
+            if (count($newWords) >= $need) {
+                break;
+            }
             if (empty($g['word'])) {
                 continue;
             }
             $word = trim(strtolower($g['word']));
-            if (in_array($word, $ownedWords, true) || in_array($word, $fromSeed, true)) {
+            // the model also repeats itself within a single response
+            if (in_array($word, $ownedWords, true)
+                || in_array($word, $fromSeed, true)
+                || in_array($word, $newWords, true)) {
                 continue;
             }
+            if (Lemma::isKnown($word, $knownStems)) {
+                continue;
+            }
+            $knownStems += Lemma::index([$word]);
             // persist generated word into the words cache
             Word::updateOrCreate(['word' => $word], [
                 'part_of_speech' => $g['part_of_speech'] ?? null,

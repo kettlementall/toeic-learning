@@ -8,6 +8,9 @@ use Illuminate\Support\Facades\Log;
 
 class ClaudeService
 {
+    /** Most words sent as a "already learned, do not repeat" list in one prompt. */
+    private const EXCLUDE_LIMIT = 1500;
+
     public function hasKey(): bool
     {
         return ! empty(config('services.anthropic.api_key'));
@@ -55,10 +58,131 @@ PROMPT;
     }
 
     /**
+     * Check a batch of words against the TOEIC vocabulary standard.
+     *
+     * Judging existing words one by one is a far easier task for the model than
+     * producing new ones under an exclusion constraint, so this catches the
+     * invented compounds and obscure entries that generation lets through.
+     *
+     * @param  string[]  $words
+     * @return array<string,bool>  lowercased word => keep it?
+     */
+    public function verifyToeicWords(array $words): array
+    {
+        $words = array_values(array_filter(array_map('trim', $words)));
+
+        if (! $this->hasKey() || empty($words)) {
+            return [];
+        }
+
+        $list = implode(', ', $words);
+
+        $prompt = <<<PROMPT
+以下是一份「多益(TOEIC)高頻字彙表」的候選字，請逐字判斷是否應該保留。
+
+判斷基準：多益是「職場英語溝通」測驗，字彙難度約在 CEFR A2-B2 之間。
+
+保留(true)的條件必須全部符合：
+- 是標準、真實存在的英文單字(可在一般英漢辭典查到)。
+- 在多益測驗中確實可能出現，屬於商務/辦公室/日常情境的實用字彙。
+- 難度不超過 CEFR B2。
+
+判為 false 的情況：
+- 拼寫錯誤、或是拼湊出來的假複合詞(例如 outbound-based、restock-able)。
+- CEFR C1/C2 等級的進階字彙，或是 GRE/SAT 這類學術測驗才會考的字
+  (例如 paucity、penchant、propitious、quintessential、scrupulous、tacit)。
+- 過於冷僻、學術或法律專用，多益幾乎不考。
+- 專有名詞、縮寫。
+
+寧可嚴格：這份表是給考生分配有限的學習時間用的，放進一個不會考的字，
+代價比漏掉一個邊緣字更高。
+
+候選字：
+{$list}
+
+只回傳 JSON 物件，鍵為單字、值為 true 或 false，不要其他文字。每個候選字都必須出現：
+{"word": true, "another": false}
+PROMPT;
+
+        for ($attempt = 0; $attempt < 3; $attempt++) {
+            $json = $this->callJson($prompt, 4096);
+            if (! is_array($json)) {
+                continue;
+            }
+
+            $out = [];
+            foreach ($json as $word => $keep) {
+                if (is_string($word) && is_bool($keep)) {
+                    $out[strtolower(trim($word))] = $keep;
+                }
+            }
+
+            if (! empty($out)) {
+                return $out;
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * One batch of the curated TOEIC high-frequency list.
+     *
+     * Unlike generateNewWords(), this asks the model to recite a well-known list
+     * in rank order rather than to invent words that avoid an exclusion set. The
+     * former is something it has actually memorised; the latter structurally
+     * pushes it down the frequency curve toward obscure vocabulary.
+     *
+     * @param  int  $from  1-based rank this batch should start at
+     * @param  string[]  $exclude  words already collected in earlier batches
+     * @return array<int,array<string,string>>
+     */
+    public function generateToeicCoreBatch(int $from, int $size, array $exclude = []): array
+    {
+        if (! $this->hasKey() || $size < 1) {
+            return [];
+        }
+
+        $to = $from + $size - 1;
+
+        $excludeHint = '';
+        if (! empty($exclude)) {
+            $known = array_values(array_unique($exclude));
+            if (count($known) > self::EXCLUDE_LIMIT) {
+                $known = array_slice($known, -self::EXCLUDE_LIMIT);
+            }
+            $list = implode(', ', $known);
+            $excludeHint = "\n以下單字先前批次已經收錄，不要重複(含其變化形)：\n{$list}\n";
+        }
+
+        $prompt = <<<PROMPT
+你正在整理一份「多益(TOEIC)高頻核心字彙表」，依實際考試出現頻率由高到低排序。
+請列出這份清單的第 {$from} 到第 {$to} 名，共 {$size} 個單字。
+
+要求：
+- 必須是多益測驗真正常考的字彙，以商務、辦公室、人事、財務、行銷、物流、旅遊、活動等情境為主。
+- 一律使用原形(單數、原型動詞)，不要收錄複數或過去式等變化形。
+- 不要收錄專有名詞、縮寫、過於基礎的字(如 the, go, big)或考試罕見的冷僻字。
+- 同一個字族只收最常考的那個詞性形式。
+{$excludeHint}
+只回傳 JSON 陣列，每個物件格式如下，不要其他文字：
+[{"word":"english", "part_of_speech":"noun/verb/adjective/adverb", "definition_zh":"繁體中文翻譯", "category":"business/office/finance/marketing/hr/logistics/travel/contracts/technology/general 擇一"}]
+PROMPT;
+
+        $json = $this->callJson($prompt, 8192);
+
+        return is_array($json) ? $json : [];
+    }
+
+    /**
      * Generate brand-new TOEIC words not yet in the user's library.
      * Returns array of ['word'=>, 'definition_zh'=>, 'part_of_speech'=>, 'example'=>, 'category'=>].
+     *
+     * @param  string[]  $exclude  words the user already has; without these the
+     *                             model keeps returning the same common words
+     *                             and every result is discarded as a duplicate.
      */
-    public function generateNewWords(int $n, ?int $level = null, ?string $category = null): array
+    public function generateNewWords(int $n, ?int $level = null, ?string $category = null, array $exclude = []): array
     {
         if (! $this->hasKey() || $n < 1) {
             return [];
@@ -67,13 +191,35 @@ PROMPT;
         $levelHint = $level ? "難度約 {$level}/5。" : '';
         $catHint = $category ? "主題類別: {$category}。" : '';
 
+        // Ask for well over what is needed: even with the exclusion list below,
+        // roughly a third of the suggestions come back as words the user already
+        // has and get filtered out by the caller. Small requests need a floor,
+        // or a couple of duplicates leave the quiz short of new words.
+        $ask = min(max($n * 3, 10), $n + 20);
+
+        $excludeHint = '';
+        if (! empty($exclude)) {
+            $known = array_values(array_unique($exclude));
+            // Cap the list so the prompt stays bounded on large libraries. Once
+            // the library outgrows the cap, sample randomly rather than always
+            // truncating the same head — the excluded subset then rotates
+            // between calls instead of permanently ignoring the same words.
+            if (count($known) > self::EXCLUDE_LIMIT) {
+                shuffle($known);
+                $known = array_slice($known, 0, self::EXCLUDE_LIMIT);
+            }
+            $list = implode(', ', $known);
+            $excludeHint = "\n以下單字使用者已經學過，絕對不要出現在結果中(包含其複數、過去式等變化形)：\n{$list}\n";
+        }
+
         $prompt = <<<PROMPT
-請列出 {$n} 個多益(TOEIC)常考英文單字。{$levelHint}{$catHint}
+請列出 {$ask} 個多益(TOEIC)常考英文單字。{$levelHint}{$catHint}
+{$excludeHint}
 只回傳 JSON 陣列，每個物件格式如下，不要其他文字：
 [{"word":"english", "part_of_speech":"noun/verb/adjective/adverb", "definition_zh":"繁體中文翻譯", "example":"一句英文例句", "category":"business/office/finance/travel/general 等", "mnemonic":"記憶小技巧(繁體中文，諧音/字根字首/拆字/聯想擇一，須與字義相關，30字內)"}]
 PROMPT;
 
-        $json = $this->callJson($prompt, 2048);
+        $json = $this->callJson($prompt, 4096);
 
         return is_array($json) ? $json : [];
     }
