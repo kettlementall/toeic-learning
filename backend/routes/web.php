@@ -43,6 +43,7 @@ Route::middleware('auth')->group(function () {
     // Spaced-repetition review
     Route::get('/review', [ReviewController::class, 'session'])->name('review.session');
     Route::post('/review/{userWord}/grade', [ReviewController::class, 'grade'])->name('review.grade');
+    Route::post('/review/{userWord}/resume', [ReviewController::class, 'resume'])->name('review.resume');
 
     // Quizzes (AI generate / take / submit / AI review)
     Route::get('/quiz/create', [QuizController::class, 'create'])->name('quiz.create');

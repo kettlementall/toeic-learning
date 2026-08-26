@@ -21,6 +21,8 @@ class DashboardController extends Controller
 
         $totalWords = UserWord::forUser($userId)->count();
         $dueCount = $this->srs->dueCount();
+        $backlogCount = $this->srs->backlogCount($userId);
+        $suspendedCount = UserWord::forUser($userId)->suspended()->count();
         $totalQuizzes = Quiz::where('user_id', $userId)->where('status', 'completed')->count();
 
         $completed = Quiz::where('user_id', $userId)->where('status', 'completed')->where('total', '>', 0)->get();
@@ -73,6 +75,7 @@ class DashboardController extends Controller
         // leeches: chronically-failed words
         $leeches = UserWord::forUser($userId)
             ->leeches()
+            ->active()
             ->with('dictionary')
             ->orderByDesc('lapses')
             ->limit(10)
@@ -93,7 +96,8 @@ class DashboardController extends Controller
             ->values();
 
         return view('dashboard', compact(
-            'totalWords', 'dueCount', 'totalQuizzes', 'avgAccuracy',
+            'totalWords', 'dueCount', 'backlogCount', 'suspendedCount',
+            'totalQuizzes', 'avgAccuracy',
             'recentQuizzes', 'grammarStats', 'posStats', 'leeches', 'aiGrammarFocus'
         ));
     }

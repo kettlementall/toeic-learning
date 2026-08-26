@@ -37,17 +37,20 @@ class QuizBuilderService
     }
 
     /**
-     * Smart mix: ~70% review (weak/due) + ~30% new words.
+     * Smart mix: review words plus a share of new ones, where the new-word
+     * share shrinks as the review backlog grows and hits zero once the backlog
+     * passes the intake gate. New material never outruns digestion.
      */
     private function smartMix(int $n, array $opts): array
     {
-        $reviewN = (int) ceil($n * 0.7);
+        $reviewN = $n - $this->newWordAllowance($n);
 
         $review = $this->weakWords($reviewN);
 
         // top up review portion from any user words if not enough
         if (count($review) < $reviewN) {
             $more = UserWord::forUser()
+                ->active()
                 ->whereNotIn('word', $review)
                 ->inRandomOrder()
                 ->limit($reviewN - count($review))
@@ -56,8 +59,8 @@ class QuizBuilderService
             $review = array_merge($review, $more);
         }
 
-        // fill the remainder with new words (~30% when review is full; more if the
-        // library was too small to fill the review portion).
+        // fill the remainder with new words (the allowance above when review is
+        // full; more if the library was too small to fill the review portion).
         $newWords = $this->newWords($n - count($review), $opts);
 
         $all = array_values(array_unique(array_merge($review, $newWords)));
@@ -76,6 +79,37 @@ class QuizBuilderService
     }
 
     /**
+     * How many new words a quiz of $n questions may introduce.
+     *
+     * Being at the daily capacity is the healthy steady state, not a reason to
+     * throttle, so the gate measures only the part of the backlog that exceeds
+     * one day's worth. From there the new-word share tapers linearly and hits
+     * zero once the excess reaches the intake gate: someone genuinely behind on
+     * reviews gets review material only.
+     */
+    private function newWordAllowance(int $n): int
+    {
+        $gate = (int) config('srs.intake_gate');
+        $share = (float) config('srs.new_word_share');
+        $capacity = (int) config('srs.daily_capacity');
+
+        $backlog = UserWord::forUser()
+            ->active()
+            ->where('next_review_at', '<=', now())
+            ->count();
+
+        $excess = max(0, $backlog - $capacity);
+
+        if ($gate > 0 && $excess >= $gate) {
+            return 0;
+        }
+
+        $taper = $gate > 0 ? 1 - ($excess / $gate) : 1.0;
+
+        return (int) floor($n * $share * $taper);
+    }
+
+    /**
      * Weak / overdue words from the user's library, picked by weighted random
      * sampling (biased toward less-familiar & overdue words, but with variety).
      *
@@ -90,7 +124,7 @@ class QuizBuilderService
             return [];
         }
 
-        $candidates = UserWord::forUser()->get(['word', 'ease_factor', 'next_review_at']);
+        $candidates = UserWord::forUser()->active()->get(['word', 'ease_factor', 'next_review_at']);
         if ($candidates->isEmpty()) {
             return [];
         }

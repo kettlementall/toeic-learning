@@ -11,7 +11,12 @@
     </div>
     <div class="bg-white rounded-xl border p-4">
         <div class="text-3xl font-bold text-amber-500">{{ $dueCount }}</div>
-        <div class="text-sm text-slate-500 mt-1">Due Today</div>
+        <div class="text-sm text-slate-500 mt-1">Today's Queue</div>
+        @if ($backlogCount > $dueCount)
+            <div class="text-xs text-slate-400 mt-0.5">
+                {{ $backlogCount }} outstanding, spread over ~{{ (int) ceil($backlogCount / max($dueCount, 1)) }} days
+            </div>
+        @endif
     </div>
     <div class="bg-white rounded-xl border p-4">
         <div class="text-3xl font-bold text-emerald-600">{{ $totalQuizzes }}</div>
@@ -94,6 +99,19 @@
             @endforeach
         </div>
         <a href="{{ route('review.session') }}" class="inline-block mt-3 text-sm text-indigo-600 hover:underline">→ Review these words</a>
+    </div>
+@endif
+
+@if ($suspendedCount > 0)
+    <div class="bg-white rounded-xl border p-5 mt-6">
+        <h2 class="font-semibold mb-1">⏸ Paused Words
+            <span class="text-sm font-normal text-slate-400">({{ $suspendedCount }} words taken out of the rotation after failing too often)</span>
+        </h2>
+        <p class="text-sm text-slate-500 mt-2">
+            Drilling these with flashcards has stopped working. Learn them deliberately —
+            look up the word origin, write your own sentence, add a mnemonic — then put them back one at a time.
+        </p>
+        <a href="{{ route('vocabulary.index') }}" class="inline-block mt-3 text-sm text-indigo-600 hover:underline">→ Open the paused list</a>
     </div>
 @endif
 

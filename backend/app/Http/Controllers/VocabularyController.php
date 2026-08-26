@@ -19,12 +19,16 @@ class VocabularyController extends Controller
         if ($tag = $request->query('tag')) {
             $query->where('tags', 'like', '%' . $tag . '%');
         }
+        if ($request->query('status') === 'paused') {
+            $query->suspended();
+        }
 
         $words = $query->paginate(30)->withQueryString();
 
         $sources = UserWord::forUser($userId)->select('source')->distinct()->pluck('source');
+        $suspendedCount = UserWord::forUser($userId)->suspended()->count();
 
-        return view('vocabulary.index', compact('words', 'sources'));
+        return view('vocabulary.index', compact('words', 'sources', 'suspendedCount'));
     }
 
     public function update(Request $request, UserWord $vocabulary)

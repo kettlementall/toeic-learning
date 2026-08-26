@@ -22,6 +22,12 @@
             {{ $sourceLabels[$s] ?? $s }}
         </a>
     @endforeach
+    @if ($suspendedCount)
+        <a href="{{ route('vocabulary.index', ['status' => 'paused']) }}"
+           class="px-3 py-1.5 rounded-full border {{ request('status') === 'paused' ? 'bg-slate-700 text-white border-slate-700' : 'bg-white text-slate-600' }}">
+            ⏸ Paused ({{ $suspendedCount }})
+        </a>
+    @endif
 </form>
 
 @if ($words->count())
@@ -43,6 +49,13 @@
                             <span class="text-xs bg-slate-100 text-slate-500 px-2 py-0.5 rounded">{{ $sourceLabels[$uw->source] ?? $uw->source }}</span>
                             @if ($uw->is_leech)
                                 <span class="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full" title="Missed again and again">🔴 missed {{ $uw->lapses }}×</span>
+                            @endif
+                            @if ($uw->is_suspended)
+                                <span class="text-xs bg-slate-200 text-slate-700 px-2 py-0.5 rounded-full" title="Out of the review rotation">⏸ paused</span>
+                                <form method="post" action="{{ route('review.resume', $uw) }}" class="inline">
+                                    @csrf
+                                    <button class="text-xs text-indigo-600 hover:underline">put back in rotation</button>
+                                </form>
                             @endif
                         </div>
                         @if (! empty($uw->dictionary?->meanings))
