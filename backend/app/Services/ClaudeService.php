@@ -58,6 +58,38 @@ PROMPT;
     }
 
     /**
+     * Write a whole dictionary entry from scratch. Used only as a fallback when
+     * dictionaryapi.dev is unreachable, so a dictionary outage doesn't take the
+     * word search down with it. Unlike enrich(), this also produces the English
+     * definitions, so the caller needs no second call.
+     *
+     * Returns [] when there is no API key, the call fails, or the term isn't a
+     * real English word (so a typo during an outage still reports a typo).
+     */
+    public function defineWord(string $word): array
+    {
+        if (! $this->hasKey()) {
+            return [];
+        }
+
+        $prompt = <<<PROMPT
+你是多益(TOEIC)英語教學專家兼字典編輯。請提供英文單字 "{$word}" 的字典資料。
+如果它不是一個真正的英文單字(例如拼錯或亂打)，只回傳 {"valid": false}，不要勉強解釋。
+否則只回傳 JSON，不要其他文字，格式如下：
+{"valid": true, "phonetic": "IPA音標，含前後斜線", "meanings": [{"pos": "詞性(noun/verb/adjective/adverb/preposition...)", "definition_en": "簡潔的英文釋義", "definition_zh": "簡潔的繁體中文翻譯", "example": "一句英文例句"}], "toeic_note": "多益常見搭配詞或用法提示(繁體中文，30字內)", "synonyms": "同義字，英文逗號分隔，最多6個", "mnemonic": "記憶小技巧(繁體中文，諧音/字根字首/拆字/聯想擇一，須與字義相關，30字內)"}
+meanings 每個詞性一條，依常用程度排序，最多4條。
+PROMPT;
+
+        $json = $this->callJson($prompt, 1024);
+
+        if (! is_array($json) || ($json['valid'] ?? false) !== true || empty($json['meanings'])) {
+            return [];
+        }
+
+        return $json;
+    }
+
+    /**
      * Check a batch of words against the TOEIC vocabulary standard.
      *
      * Judging existing words one by one is a far easier task for the model than

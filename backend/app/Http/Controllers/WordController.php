@@ -89,6 +89,12 @@ class WordController extends Controller
         $word = $this->dictionary->lookup($term);
 
         if (! $word) {
+            if ($this->dictionary->upstreamUnavailable) {
+                return response()->json([
+                    'error' => 'The dictionary service is temporarily unreachable. Please try again in a moment.',
+                ], 503);
+            }
+
             return response()->json(['error' => "Couldn't find “{$term}”. Please check the spelling."], 404);
         }
 

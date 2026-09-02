@@ -8,17 +8,27 @@ use Illuminate\Support\Facades\Log;
 
 class DictionaryService
 {
+    /**
+     * True when the last lookup() came up empty because the dictionary API was
+     * unreachable, rather than because the word doesn't exist. Lets callers tell
+     * "no such word" apart from "service is down" instead of blaming spelling.
+     */
+    public bool $upstreamUnavailable = false;
+
     public function __construct(private ClaudeService $claude)
     {
     }
 
     /**
      * Look up a word: cache (words table) -> Free Dictionary API -> Claude enrich.
-     * Returns the Word model (persisted).
+     * When the dictionary API is unreachable, falls back to a Claude-generated
+     * entry so search keeps working. Returns the Word model (persisted).
      */
     public function lookup(string $term, bool $force = false): ?Word
     {
         $term = trim(strtolower($term));
+        $this->upstreamUnavailable = false;
+
         if ($term === '') {
             return null;
         }
@@ -31,12 +41,22 @@ class DictionaryService
 
         // 2. Free Dictionary API
         $dict = $this->fetchDictionary($term);
+
+        // 2b. dictionary is down (not a 404) -> Claude writes the entry instead
+        if (! $dict && $this->upstreamUnavailable) {
+            $dict = $this->defineWithClaude($term);
+            if ($dict) {
+                $this->upstreamUnavailable = false;
+            }
+        }
+
         if (! $dict) {
             return $cached; // may be null
         }
 
-        // 3. Claude enrich (Chinese per part of speech + TOEIC usage)
-        $enrich = $this->claude->enrich($term, $dict);
+        // 3. Claude enrich (Chinese per part of speech + TOEIC usage). The AI
+        //    fallback already carries the Chinese, so it skips the second call.
+        $enrich = ($dict['enriched'] ?? false) ? $dict : $this->claude->enrich($term, $dict);
 
         // zip the Chinese translations back onto each meaning (same order)
         $meanings = $dict['meanings'] ?? [];
@@ -57,7 +77,9 @@ class DictionaryService
             'definition_zh' => $primaryZh,
             'toeic_note' => $enrich['toeic_note'] ?? null,
             'mnemonic' => $enrich['mnemonic'] ?? ($cached->mnemonic ?? null),
-            'source' => $cached?->source === 'seed' ? 'seed' : 'api',
+            // keep whatever the word was first filed under (seed / toeic_core /
+            // ai) so a search can't demote a curated word to a plain api entry
+            'source' => $cached?->source ?: ($dict['source'] ?? 'api'),
             'raw_json' => $dict['raw'] ?? null,
         ];
 
@@ -66,19 +88,30 @@ class DictionaryService
 
     /**
      * Call dictionaryapi.dev and normalize the response.
+     *
+     * A 404 means the word genuinely isn't in the dictionary; anything else
+     * (timeout, connection refused, 5xx) means the service is unavailable and
+     * sets $upstreamUnavailable so the caller can fall back or say so.
      */
     private function fetchDictionary(string $term): ?array
     {
         $base = config('services.dictionary.url');
 
         try {
-            $resp = Http::timeout(15)->acceptJson()->get("{$base}/" . urlencode($term));
+            $resp = Http::connectTimeout(5)->timeout(10)->acceptJson()->get("{$base}/" . urlencode($term));
         } catch (\Throwable $e) {
             Log::warning("Dictionary API error for {$term}: " . $e->getMessage());
+            $this->upstreamUnavailable = true;
             return null;
         }
 
+        if ($resp->status() === 404) {
+            return null; // no such word
+        }
+
         if (! $resp->successful()) {
+            Log::warning("Dictionary API error for {$term}: HTTP " . $resp->status());
+            $this->upstreamUnavailable = true;
             return null;
         }
 
@@ -147,6 +180,60 @@ class DictionaryService
             'meanings' => $meanings,
             'synonyms' => $synonyms ? implode(', ', array_slice(array_unique($synonyms), 0, 6)) : null,
             'raw' => $entry,
+        ];
+    }
+
+    /**
+     * Fallback entry written by Claude, used only when dictionaryapi.dev is
+     * unreachable. Same normalized shape as fetchDictionary(), except the
+     * Chinese is already filled in ('enriched') and there is no audio
+     * recording — the UI falls back to browser text-to-speech for those.
+     */
+    private function defineWithClaude(string $term): ?array
+    {
+        $ai = $this->claude->defineWord($term);
+        if (! $ai) {
+            return null;
+        }
+
+        $meanings = [];
+        foreach (($ai['meanings'] ?? []) as $m) {
+            if (empty($m['definition_en'])) {
+                continue;
+            }
+            $meanings[] = [
+                'pos' => $m['pos'] ?? null,
+                'definition_en' => $m['definition_en'],
+                'definition_zh' => $m['definition_zh'] ?? null,
+                'example' => $m['example'] ?? null,
+            ];
+        }
+
+        if (! $meanings) {
+            return null;
+        }
+
+        Log::info("Dictionary API unavailable, served {$term} from Claude");
+
+        $first = $meanings[0];
+        $synonyms = $ai['synonyms'] ?? null;
+        if (is_array($synonyms)) {
+            $synonyms = implode(', ', array_slice($synonyms, 0, 6));
+        }
+
+        return [
+            'phonetic' => $ai['phonetic'] ?? null,
+            'audio_url' => null,
+            'part_of_speech' => $first['pos'],
+            'definition_en' => $first['definition_en'],
+            'example' => $first['example'],
+            'meanings' => $meanings,
+            'synonyms' => $synonyms ? mb_substr($synonyms, 0, 255) : null,
+            'toeic_note' => $ai['toeic_note'] ?? null,
+            'mnemonic' => $ai['mnemonic'] ?? null,
+            'enriched' => true,
+            'source' => 'ai',
+            'raw' => null,
         ];
     }
 }
