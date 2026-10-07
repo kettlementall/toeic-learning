@@ -30,11 +30,38 @@ class QuizBuilderService
      */
     public function selectWords(int $n, string $mode = 'smart', array $opts = []): array
     {
+        if ($mode === 'custom') {
+            return $this->customWords($n, $opts);
+        }
+
+        // words the user just looked up go first, capped at half the quiz so
+        // the weak-word review still gets its share
+        $fresh = $this->freshSearchWords(intdiv($n, 2));
+
         return match ($mode) {
-            'weak' => $this->weakWords($n),
-            'custom' => $this->customWords($n, $opts),
-            default => $this->smartMix($n, $opts),
+            'weak' => array_merge($fresh, $this->weakWords($n - count($fresh), $fresh)),
+            default => $this->smartMix($n, $opts, $fresh),
         };
+    }
+
+    /**
+     * Searched words not yet tested, most recently looked up first.
+     *
+     * @return string[]
+     */
+    private function freshSearchWords(int $limit): array
+    {
+        if ($limit < 1) {
+            return [];
+        }
+
+        return UserWord::forUser()
+            ->freshSearch()
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->limit($limit)
+            ->pluck('word')
+            ->all();
     }
 
     /**
@@ -42,11 +69,12 @@ class QuizBuilderService
      * share shrinks as the review backlog grows and hits zero once the backlog
      * passes the intake gate. New material never outruns digestion.
      */
-    private function smartMix(int $n, array $opts): array
+    private function smartMix(int $n, array $opts, array $fresh = []): array
     {
         $reviewN = $n - $this->newWordAllowance($n);
 
-        $review = $this->weakWords($reviewN);
+        // fresh searched words take the front of the review portion
+        $review = array_merge($fresh, $this->weakWords($reviewN - count($fresh), $fresh));
 
         // top up review portion from any user words if not enough
         if (count($review) < $reviewN) {
@@ -119,13 +147,16 @@ class QuizBuilderService
      * and over. Cooldown only reweights — it never excludes — so we never run
      * short even if the whole library was recently seen.
      */
-    private function weakWords(int $n): array
+    private function weakWords(int $n, array $exclude = []): array
     {
         if ($n < 1) {
             return [];
         }
 
-        $candidates = UserWord::forUser()->active()->get(['word', 'ease_factor', 'next_review_at']);
+        $candidates = UserWord::forUser()
+            ->active()
+            ->when($exclude, fn ($q) => $q->whereNotIn('word', $exclude))
+            ->get(['word', 'ease_factor', 'next_review_at']);
         if ($candidates->isEmpty()) {
             return [];
         }

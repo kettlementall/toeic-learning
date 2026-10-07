@@ -21,11 +21,17 @@ class SpacedRepetitionService
     {
         $quality = max(0, min(5, $quality));
 
+        // a word already failed today (quiz, review) is not penalised again:
+        // one bad day is one lapse, not three
+        $repeatFailure = $quality < 3 && $this->lapsedToday($w);
+
         if ($quality < 3) {
             // failed recall -> reset
             $w->repetitions = 0;
             $w->interval_days = 1;
-            $w->lapses = ($w->lapses ?? 0) + 1;
+            if (! $repeatFailure) {
+                $w->lapses = ($w->lapses ?? 0) + 1;
+            }
         } else {
             $w->repetitions += 1;
             $w->interval_days = match ($w->repetitions) {
@@ -38,8 +44,10 @@ class SpacedRepetitionService
         }
 
         // update ease factor
-        $ef = $w->ease_factor + (0.1 - (5 - $quality) * (0.08 + (5 - $quality) * 0.02));
-        $w->ease_factor = max(1.3, round($ef, 2));
+        if (! $repeatFailure) {
+            $ef = $w->ease_factor + (0.1 - (5 - $quality) * (0.08 + (5 - $quality) * 0.02));
+            $w->ease_factor = max(1.3, round($ef, 2));
+        }
 
         $w->last_reviewed_at = now();
         $w->next_review_at = $this->schedule($w, max(1, $w->interval_days));
@@ -128,14 +136,24 @@ class SpacedRepetitionService
     }
 
     /**
-     * Drive SM-2 by word string (used by quiz grading). No-op if the word
-     * is not in the user's library.
+     * A correct quiz answer. Counts as a review only when the card is due (or
+     * has never been reviewed); a multiple-choice hit on a card that is not due
+     * yet is an early peek, and grading it would stretch the interval as if a
+     * full one had passed. Those are logged for stats but leave the schedule.
      */
-    public function gradeByWord(string $word, int $quality): void
+    public function quizCorrect(string $word): void
     {
-        $uw = UserWord::forUser()->where('word', trim(strtolower($word)))->first();
-        if ($uw) {
-            $this->grade($uw, $quality);
+        $uw = UserWord::forUser()->active()->where('word', trim(strtolower($word)))->first();
+        if (! $uw) {
+            return;
+        }
+
+        $due = ! $uw->next_review_at || $uw->next_review_at <= now();
+
+        if ($due || ! $uw->last_reviewed_at) {
+            $this->grade($uw, 5);
+        } else {
+            $this->log($uw, 5);
         }
     }
 
@@ -151,6 +169,7 @@ class SpacedRepetitionService
         $this->rebalance($userId);
 
         return $this->dueQuery($userId)
+            ->orderBy($this->priorityExpression())
             ->orderByDesc($this->urgencyExpression())
             ->limit((int) config('srs.daily_capacity'))
             ->get();
@@ -176,6 +195,16 @@ class SpacedRepetitionService
         return UserWord::forUser($userId)
             ->active()
             ->where('next_review_at', '<=', now());
+    }
+
+    /**
+     * 0 for words the user just looked up and has not been tested on yet, 1
+     * otherwise. Sorted first, so those words always get today's slots and are
+     * never the ones rebalance pushes forward. Mirrors UserWord::freshSearch().
+     */
+    private function priorityExpression(): \Illuminate\Database\Query\Expression
+    {
+        return DB::raw("CASE WHEN source = 'search' AND last_reviewed_at IS NULL AND COALESCE(lapses, 0) = 0 THEN 0 ELSE 1 END");
     }
 
     /**
@@ -212,6 +241,7 @@ class SpacedRepetitionService
 
         // keep the most urgent `capacity` cards for today, push the rest
         $overflow = $this->dueQuery($userId)
+            ->orderBy($this->priorityExpression())
             ->orderByDesc($this->urgencyExpression())
             ->offset($capacity)
             ->limit($overdue)
@@ -240,7 +270,7 @@ class SpacedRepetitionService
     }
 
     /**
-     * Weakness feedback: a word was answered wrong (quiz) or flagged by AI review.
+     * Weakness feedback: a word was answered wrong in a quiz.
      * Create/find the user_word, lower ease factor, schedule for today.
      */
     public function demote(string $word, string $source = 'quiz_weak'): UserWord
@@ -249,6 +279,10 @@ class SpacedRepetitionService
         $wordModel = Word::where('word', $word)->first();
 
         $uw = UserWord::firstOrNew(['user_id' => auth()->id(), 'word' => $word]);
+
+        // only the first failure of the day costs a lapse and ease
+        $repeatFailure = $this->lapsedToday($uw);
+
         if (! $uw->exists) {
             $uw->word_id = $wordModel?->id;
             $uw->source = $source;
@@ -256,11 +290,15 @@ class SpacedRepetitionService
             $uw->repetitions = 0;
             $uw->interval_days = 0;
         } else {
-            $uw->ease_factor = max(1.3, round($uw->ease_factor - 0.2, 2));
+            if (! $repeatFailure) {
+                $uw->ease_factor = max(1.3, round($uw->ease_factor - 0.2, 2));
+            }
             $uw->repetitions = 0;
             $uw->interval_days = 0;
         }
-        $uw->lapses = ($uw->lapses ?? 0) + 1;
+        if (! $repeatFailure) {
+            $uw->lapses = ($uw->lapses ?? 0) + 1;
+        }
         $uw->next_review_at = Carbon::today();
 
         if ($uw->lapses >= config('srs.leech_suspend_at') && ! $uw->suspended_at) {
@@ -272,6 +310,56 @@ class SpacedRepetitionService
         $this->log($uw, 1);
 
         return $uw;
+    }
+
+    /**
+     * A word the AI review thinks is worth another look. Unlike demote() this
+     * is not a failure: no lapse, no ease change, no failed log. New words join
+     * the library due today; an existing word is pulled forward to today, with
+     * its interval re-anchored to the real gap since its last review so the
+     * early review cannot stretch it. Suspended words are left alone.
+     */
+    public function queueForReview(string $word, string $source = 'ai_review'): UserWord
+    {
+        $word = trim(strtolower($word));
+
+        $uw = UserWord::firstOrNew(['user_id' => auth()->id(), 'word' => $word]);
+
+        if (! $uw->exists) {
+            $uw->word_id = Word::where('word', $word)->value('id');
+            $uw->source = $source;
+            $uw->repetitions = 0;
+            $uw->interval_days = 0;
+            $uw->next_review_at = Carbon::today();
+            $uw->save();
+
+            return $uw;
+        }
+
+        if ($uw->suspended_at || ($uw->next_review_at && $uw->next_review_at <= Carbon::today())) {
+            return $uw;
+        }
+
+        if ($uw->last_reviewed_at && $uw->repetitions > 0) {
+            $uw->interval_days = max(1, (int) $uw->last_reviewed_at->copy()->startOfDay()->diffInDays(Carbon::today()));
+        }
+        $uw->next_review_at = Carbon::today();
+        $uw->save();
+
+        return $uw;
+    }
+
+    /** Whether this card already recorded a failure today. */
+    private function lapsedToday(UserWord $w): bool
+    {
+        if (! $w->exists) {
+            return false;
+        }
+
+        return ReviewLog::where('user_word_id', $w->id)
+            ->where('quality', '<', 3)
+            ->where('reviewed_at', '>=', Carbon::today())
+            ->exists();
     }
 
     /** Put a suspended word back into the rotation, relearning from scratch. */

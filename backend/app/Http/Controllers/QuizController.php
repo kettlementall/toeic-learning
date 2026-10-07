@@ -230,8 +230,9 @@ class QuizController extends Controller
                 if ($correct) {
                     // correct multiple-choice -> quality 5 so ease_factor actually
                     // rises (at quality 4 the SM-2 ease delta is exactly 0, which
-                    // kept answered-right weak words stuck at high selection weight)
-                    $this->srs->gradeByWord($q->word, 5);
+                    // kept answered-right weak words stuck at high selection weight).
+                    // Cards not due yet are only logged, not rescheduled.
+                    $this->srs->quizCorrect($q->word);
                 } else {
                     $this->srs->demote($q->word, 'quiz_weak');
                 }
@@ -268,7 +269,7 @@ class QuizController extends Controller
             // but only real dictionary words — enrich first and skip anything that
             // can't be looked up (function words like "where", typos) so we never
             // queue empty cards. Skip words already in this quiz: they were graded
-            // at submit, so re-demoting here would double-count the lapse. Grammar
+            // at submit and already carry today's result. Grammar
             // quizzes don't touch the vocab library; they adapt via boostGrammar().
             if ($quiz->type === 'vocab_mc') {
                 $alreadyTested = $quiz->questions
@@ -281,11 +282,12 @@ class QuizController extends Controller
                         continue;
                     }
                     if (in_array(strtolower(trim($w)), $alreadyTested, true)) {
-                        continue; // already graded at submit — don't double-count
+                        continue; // already graded at submit
                     }
                     $entry = $this->dictionary->lookup($w);
                     if ($entry && $entry->definition_en) {
-                        $this->srs->demote($entry->word, 'ai_review');
+                        // a suggestion, not a wrong answer: queue it, no lapse
+                        $this->srs->queueForReview($entry->word, 'ai_review');
                     }
                 }
             }

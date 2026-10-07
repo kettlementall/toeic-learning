@@ -47,6 +47,19 @@ class UserWord extends Model
         return $query->whereNull('suspended_at');
     }
 
+    /**
+     * Words the user looked up themselves and has not been tested on yet.
+     * They jump the queue in quizzes and reviews; the first graded review
+     * (sets last_reviewed_at) or failure (adds a lapse) ends that.
+     */
+    public function scopeFreshSearch(Builder $query): Builder
+    {
+        return $query->active()
+            ->where('source', 'search')
+            ->whereNull('last_reviewed_at')
+            ->where(fn ($q) => $q->whereNull('lapses')->orWhere('lapses', 0));
+    }
+
     /** Words pulled out of the rotation after failing too many times. */
     public function scopeSuspended(Builder $query): Builder
     {

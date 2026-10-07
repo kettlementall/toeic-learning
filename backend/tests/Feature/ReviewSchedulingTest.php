@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\ReviewLog;
 use App\Models\User;
 use App\Models\UserWord;
 use App\Services\QuizBuilderService;
@@ -158,6 +159,97 @@ class ReviewSchedulingTest extends TestCase
         $this->assertSame(0, $card->repetitions);
         $this->assertSame(1, $card->interval_days);
         $this->assertSame(1, $this->srs->backlogCount($user->id));
+    }
+
+    public function test_a_correct_quiz_answer_on_a_card_not_yet_due_keeps_its_schedule(): void
+    {
+        $user = User::factory()->create();
+        $this->actingAs($user);
+        $due = now()->addDays(5)->startOfDay();
+        $card = $this->card($user, 'contract', [
+            'interval_days' => 6,
+            'repetitions' => 2,
+            'next_review_at' => $due,
+            'last_reviewed_at' => now()->subDay(),
+        ]);
+
+        $this->srs->quizCorrect('contract');
+
+        $card->refresh();
+        $this->assertSame(6, $card->interval_days, 'an early peek does not stretch the interval');
+        $this->assertSame(2, $card->repetitions);
+        $this->assertTrue($card->next_review_at->equalTo($due));
+        $this->assertSame(1, ReviewLog::where('user_word_id', $card->id)->where('quality', 5)->count(), 'still counted for stats');
+    }
+
+    public function test_a_correct_quiz_answer_on_a_due_or_never_reviewed_card_counts_as_a_review(): void
+    {
+        $user = User::factory()->create();
+        $this->actingAs($user);
+        $due = $this->card($user, 'invoice', ['interval_days' => 6, 'repetitions' => 2]);
+        $untested = $this->card($user, 'warranty', [
+            'source' => 'search',
+            'interval_days' => 0,
+            'repetitions' => 0,
+            'next_review_at' => now()->addDays(4),
+            'last_reviewed_at' => null,
+        ]);
+
+        $this->srs->quizCorrect('invoice');
+        $this->srs->quizCorrect('warranty');
+
+        $this->assertSame(3, $due->refresh()->repetitions);
+        $this->assertSame(1, $untested->refresh()->repetitions);
+        $this->assertNotNull($untested->last_reviewed_at);
+    }
+
+    public function test_failing_the_same_word_twice_in_one_day_costs_one_lapse(): void
+    {
+        $user = User::factory()->create();
+        $this->actingAs($user);
+        $card = $this->card($user, 'contract', ['lapses' => 0, 'ease_factor' => 2.5]);
+
+        $this->srs->demote('contract');          // wrong in a quiz
+        $card->refresh();
+        $this->assertSame(1, $card->lapses);
+        $this->assertSame(2.3, $card->ease_factor);
+
+        $this->srs->grade($card, 1);              // then "Forgot" in review
+        $this->srs->demote('contract');           // and wrong in another quiz
+
+        $card->refresh();
+        $this->assertSame(1, $card->lapses, 'one bad day is one lapse');
+        $this->assertSame(2.3, $card->ease_factor, 'and one ease drop');
+        $this->assertSame(0, $card->repetitions, 'but it is still relearned');
+    }
+
+    public function test_ai_review_suggestions_are_queued_without_counting_as_failures(): void
+    {
+        $user = User::factory()->create();
+        $this->actingAs($user);
+        $existing = $this->card($user, 'contract', [
+            'lapses' => 2,
+            'ease_factor' => 2.4,
+            'interval_days' => 20,
+            'repetitions' => 4,
+            'next_review_at' => now()->addDays(15),
+            'last_reviewed_at' => now()->subDays(5),
+        ]);
+
+        $new = $this->srs->queueForReview('warranty');
+        $this->srs->queueForReview('contract');
+
+        $this->assertSame(0, $new->refresh()->lapses);
+        $this->assertSame('ai_review', $new->source);
+        $this->assertTrue($new->next_review_at->lte(now()), 'new word is due today');
+
+        $existing->refresh();
+        $this->assertSame(2, $existing->lapses);
+        $this->assertSame(2.4, $existing->ease_factor);
+        $this->assertSame(4, $existing->repetitions);
+        $this->assertTrue($existing->next_review_at->lte(now()), 'pulled forward to today');
+        $this->assertSame(5, $existing->interval_days, 'interval re-anchored to the real gap');
+        $this->assertSame(0, ReviewLog::count(), 'no failure logged');
     }
 
     public function test_new_words_are_gated_only_once_the_backlog_exceeds_a_days_work(): void
