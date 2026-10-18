@@ -18,14 +18,11 @@
 @endphp
 
 <div x-data="reviewSession(@js($cards))" class="max-w-xl mx-auto">
-    <h1 class="text-2xl font-bold mb-1">Daily Review</h1>
-    @if ($backlog > $words->count())
-        <p class="text-sm text-slate-500 mb-2">
-            {{ $backlog }} words are outstanding — today's session is capped at
-            {{ config('srs.daily_capacity') }} so the queue stays finishable.
-            The rest is already spread across the coming days.
-        </p>
-    @endif
+    <h1 class="text-2xl font-bold mb-1">Flashcard Review</h1>
+    <p class="text-sm text-slate-500 mb-2">
+        Optional — your quizzes already drill these words and keep the schedule
+        in order. Capped at {{ config('srs.daily_capacity') }} cards a day.
+    </p>
 
     <template x-if="!done">
         <div>
@@ -88,8 +85,8 @@
             <p class="text-slate-500 text-sm mb-5" x-text="cards.length ? 'Your next review times have been scheduled along the memory curve.' : 'Look up words or take a quiz to build up your review queue.'"></p>
             @if ($backlog > $words->count())
                 <p class="text-slate-400 text-xs mb-5">
-                    That is today's whole quota. {{ $backlog - $words->count() }} more words are queued for the days ahead —
-                    come back tomorrow rather than pushing on.
+                    That is today's whole quota. {{ $backlog - $words->count() }} more words are queued for the days ahead,
+                    and your quizzes will keep working through them.
                 </p>
             @endif
             <a href="{{ route('dashboard') }}" class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm">Back to Dashboard</a>

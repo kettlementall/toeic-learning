@@ -17,8 +17,10 @@ class QuizBuilderService
         'relative', 'comparison', 'agreement', 'collocation', 'vocab_in_context',
     ];
 
-    public function __construct(private ClaudeService $claude)
-    {
+    public function __construct(
+        private ClaudeService $claude,
+        private SpacedRepetitionService $srs,
+    ) {
     }
 
     /**
@@ -34,14 +36,27 @@ class QuizBuilderService
             return $this->customWords($n, $opts);
         }
 
-        // words the user just looked up go first, capped at half the quiz so
-        // the weak-word review still gets its share
-        $fresh = $this->freshSearchWords(intdiv($n, 2));
+        // Words a quiz built today is already asking about. Another quiz in the
+        // same sitting should not ask again — nothing has been graded yet, so
+        // they all still look due. The other half of that rule, words already
+        // answered correctly today, lives in UserWord::notClearedToday().
+        $waiting = $this->waitingInAnUnfinishedQuiz();
 
-        return match ($mode) {
-            'weak' => array_merge($fresh, $this->weakWords($n - count($fresh), $fresh)),
-            default => $this->smartMix($n, $opts, $fresh),
-        };
+        if ($mode === 'weak') {
+            // words the user just looked up go first, capped at half the quiz
+            // so the weak-word drill still gets its share
+            $fresh = $this->freshSearchWords(intdiv($n, 2), $waiting);
+
+            // the lookups past the cap wait their turn: weakWords() samples the
+            // whole library and would otherwise put them back over it
+            $held = array_merge($waiting, UserWord::forUser()->freshSearch()->pluck('word')->all());
+
+            return array_merge($fresh, $this->weakWords($n - count($fresh), $held));
+        }
+
+        // the smart mix reads its fresh lookups off the due queue instead,
+        // which already orders them first — see dueFirstReview()
+        return $this->smartMix($n, $opts, $waiting);
     }
 
     /**
@@ -49,7 +64,7 @@ class QuizBuilderService
      *
      * @return string[]
      */
-    private function freshSearchWords(int $limit): array
+    private function freshSearchWords(int $limit, array $exclude = []): array
     {
         if ($limit < 1) {
             return [];
@@ -57,6 +72,7 @@ class QuizBuilderService
 
         return UserWord::forUser()
             ->freshSearch()
+            ->when($exclude, fn ($q) => $q->whereNotIn('word', $exclude))
             ->orderByDesc('created_at')
             ->orderByDesc('id')
             ->limit($limit)
@@ -65,16 +81,20 @@ class QuizBuilderService
     }
 
     /**
-     * Smart mix: review words plus a share of new ones, where the new-word
-     * share shrinks as the review backlog grows and hits zero once the backlog
-     * passes the intake gate. New material never outruns digestion.
+     * Smart mix: the cards closest to being forgotten, plus a fixed share of
+     * new words. This is the only study surface the learner opens, so it also
+     * carries the scheduling work the review page used to trigger.
      */
-    private function smartMix(int $n, array $opts, array $fresh = []): array
+    private function smartMix(int $n, array $opts, array $waiting = []): array
     {
+        // repair the schedule first: everything below reads from it, and
+        // nothing else in this deployment ever calls rebalance.
+        $this->srs->rebalance();
+
+        // then size the new-word share against a schedule that is already flat
         $reviewN = $n - $this->newWordAllowance($n);
 
-        // fresh searched words take the front of the review portion
-        $review = array_merge($fresh, $this->weakWords($reviewN - count($fresh), $fresh));
+        $review = $this->dueFirstReview($reviewN, intdiv($n, 2), $waiting);
 
         // top up review portion from any user words if not enough
         if (count($review) < $reviewN) {
@@ -108,34 +128,122 @@ class QuizBuilderService
     }
 
     /**
-     * How many new words a quiz of $n questions may introduce.
+     * The review portion, due-first.
      *
-     * Being at the daily capacity is the healthy steady state, not a reason to
-     * throttle, so the gate measures only the part of the backlog that exceeds
-     * one day's worth. From there the new-word share tapers linearly and hits
-     * zero once the excess reaches the intake gate: someone genuinely behind on
-     * reviews gets review material only.
+     * SpacedRepetitionService::dueWords() already rebalances, puts fresh
+     * lookups first, orders the rest by relative overdueness and caps the
+     * result at the daily capacity — so the quiz drills exactly the cards the
+     * review page would have shown, and every slot lands on a card
+     * quizCorrect() will actually reschedule. A card that is not due is only an
+     * early peek: it gets logged and drains nothing.
+     *
+     * Fresh lookups are held to $freshCap so established cards keep a share.
+     *
+     * Once today's queue is spent — a second quiz in one sitting, or a day
+     * already cleared — pullForward() makes the next cards due so the extra
+     * questions keep draining the backlog. weakWords() stays the last resort,
+     * for a library with nothing left to pull.
+     *
+     * @return string[]
+     */
+    private function dueFirstReview(int $n, int $freshCap, array $waiting): array
+    {
+        if ($n < 1) {
+            return [];
+        }
+
+        $held = $waiting;
+        $picked = [];
+        $freshUsed = 0;
+
+        // Ask for a window wider than the portion: words held back and lookups
+        // past their cap are skipped, and the queue is ordered, so a window of
+        // exactly $n would come back short. The daily capacity is the
+        // calendar's unit of work, not a ceiling on one sitting.
+        $window = $n + count($held) + $freshCap;
+
+        foreach ($this->srs->dueWords(null, $window) as $uw) {
+            if (count($picked) >= $n) {
+                break;
+            }
+            if (in_array($uw->word, $held, true)) {
+                continue;
+            }
+            if ($uw->is_fresh_search) {
+                if ($freshUsed >= $freshCap) {
+                    // over the cap: hold it back from the top-ups below too
+                    $held[] = $uw->word;
+
+                    continue;
+                }
+                $freshUsed++;
+            }
+            $picked[] = $uw->word;
+        }
+
+        if (count($picked) < $n) {
+            $picked = array_merge(
+                $picked,
+                $this->srs->pullForward($n - count($picked), array_merge($picked, $held))
+            );
+        }
+
+        if (count($picked) < $n) {
+            $picked = array_merge(
+                $picked,
+                $this->weakWords($n - count($picked), array_merge($picked, $held))
+            );
+        }
+
+        return $picked;
+    }
+
+    /**
+     * Words sitting in a quiz built today and never submitted.
+     *
+     * Building a second quiz before finishing the first would otherwise draw
+     * the same words: nothing has been graded yet, so they are all still due.
+     * Scoped to today on purpose — a quiz abandoned weeks ago must not keep its
+     * words out of circulation for good.
+     *
+     * @return string[]
+     */
+    private function waitingInAnUnfinishedQuiz(): array
+    {
+        return QuizQuestion::whereNotNull('word')
+            ->whereIn('quiz_id', Quiz::where('user_id', auth()->id())
+                ->where('status', 'pending')
+                ->whereDate('created_at', today())
+                ->select('id'))
+            ->distinct()
+            ->pluck('word')
+            // quiz_questions keeps whatever case the generator produced, while
+            // user_words is always lower-cased: compare on the same footing
+            ->map(fn ($word) => trim(strtolower($word)))
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * How many new words a quiz of $n questions introduces.
+     *
+     * A flat share with a floor, not a budget. Quizzes are the only study
+     * surface, so one that carries no new words means the curated TOEIC list
+     * never advances. The backlog taper this replaces could not work any more:
+     * rebalance() now runs on every quiz build, which pins the raw backlog at
+     * the daily capacity, so the excess it measured was always zero.
+     *
+     * Intake pressure is absorbed by the schedule instead — rebalance defers
+     * the least urgent cards — rather than by starving new material.
      */
     private function newWordAllowance(int $n): int
     {
-        $gate = (int) config('srs.intake_gate');
         $share = (float) config('srs.new_word_share');
-        $capacity = (int) config('srs.daily_capacity');
+        $allowance = (int) floor($n * $share);
 
-        $backlog = UserWord::forUser()
-            ->active()
-            ->where('next_review_at', '<=', now())
-            ->count();
-
-        $excess = max(0, $backlog - $capacity);
-
-        if ($gate > 0 && $excess >= $gate) {
-            return 0;
-        }
-
-        $taper = $gate > 0 ? 1 - ($excess / $gate) : 1.0;
-
-        return (int) floor($n * $share * $taper);
+        // a quiz big enough to spare a slot always carries something new
+        return $n >= 5 ? max(1, $allowance) : $allowance;
     }
 
     /**
@@ -146,6 +254,10 @@ class QuizBuilderService
      * selection rotates instead of drilling the same cluster of hard words over
      * and over. Cooldown only reweights — it never excludes — so we never run
      * short even if the whole library was recently seen.
+     *
+     * Words this sitting has already answered correctly are left out, so a long
+     * run of quizzes keeps finding material; if that empties the pool the whole
+     * library comes back, because running short is worse than repeating.
      */
     private function weakWords(int $n, array $exclude = []): array
     {
@@ -153,10 +265,15 @@ class QuizBuilderService
             return [];
         }
 
-        $candidates = UserWord::forUser()
+        $pool = fn () => UserWord::forUser()
             ->active()
-            ->when($exclude, fn ($q) => $q->whereNotIn('word', $exclude))
-            ->get(['word', 'ease_factor', 'next_review_at']);
+            ->when($exclude, fn ($q) => $q->whereNotIn('word', $exclude));
+
+        $candidates = $pool()->notClearedToday()->get(['word', 'ease_factor', 'next_review_at']);
+
+        if ($candidates->isEmpty()) {
+            $candidates = $pool()->get(['word', 'ease_factor', 'next_review_at']);
+        }
         if ($candidates->isEmpty()) {
             return [];
         }

@@ -49,6 +49,11 @@ class QuizController extends Controller
             return back()->with('error', 'ANTHROPIC_API_KEY is not set, so AI quiz generation is unavailable. Add your key to backend/.env and restart.');
         }
 
+        // Quizzes are the only study surface here and nothing runs the Laravel
+        // scheduler, so every quiz build repairs the review schedule. The smart
+        // mix does this too; Part 5 and news quizzes never reach that path.
+        $this->srs->rebalance();
+
         if ($data['type'] === 'news_reading') {
             return $this->storeNews($data['topic'] ?? 'top');
         }
@@ -228,10 +233,8 @@ class QuizController extends Controller
             if ($q->word) {
                 // vocab question -> drive SM-2 (also writes the review_log)
                 if ($correct) {
-                    // correct multiple-choice -> quality 5 so ease_factor actually
-                    // rises (at quality 4 the SM-2 ease delta is exactly 0, which
-                    // kept answered-right weak words stuck at high selection weight).
-                    // Cards not due yet are only logged, not rescheduled.
+                    // see quizCorrect(): worth a "good", and only a card that is
+                    // actually due gets rescheduled
                     $this->srs->quizCorrect($q->word);
                 } else {
                     $this->srs->demote($q->word, 'quiz_weak');

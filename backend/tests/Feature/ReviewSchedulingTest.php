@@ -179,7 +179,13 @@ class ReviewSchedulingTest extends TestCase
         $this->assertSame(6, $card->interval_days, 'an early peek does not stretch the interval');
         $this->assertSame(2, $card->repetitions);
         $this->assertTrue($card->next_review_at->equalTo($due));
-        $this->assertSame(1, ReviewLog::where('user_word_id', $card->id)->where('quality', 5)->count(), 'still counted for stats');
+        $this->assertSame(
+            1,
+            ReviewLog::where('user_word_id', $card->id)
+                ->where('quality', SpacedRepetitionService::QUIZ_CORRECT_QUALITY)
+                ->count(),
+            'still counted for stats'
+        );
     }
 
     public function test_a_correct_quiz_answer_on_a_due_or_never_reviewed_card_counts_as_a_review(): void
@@ -199,6 +205,7 @@ class ReviewSchedulingTest extends TestCase
         $this->srs->quizCorrect('warranty');
 
         $this->assertSame(3, $due->refresh()->repetitions);
+        $this->assertSame(2.5, (float) $due->ease_factor, 'recognition does not raise ease');
         $this->assertSame(1, $untested->refresh()->repetitions);
         $this->assertNotNull($untested->last_reviewed_at);
     }
@@ -252,11 +259,11 @@ class ReviewSchedulingTest extends TestCase
         $this->assertSame(0, ReviewLog::count(), 'no failure logged');
     }
 
-    public function test_new_words_are_gated_only_once_the_backlog_exceeds_a_days_work(): void
+    public function test_every_quiz_carries_new_words_no_matter_the_backlog(): void
     {
         $user = User::factory()->create();
         $this->actingAs($user);
-        config(['srs.intake_gate' => 20, 'srs.new_word_share' => 0.3, 'srs.daily_capacity' => 10]);
+        config(['srs.new_word_share' => 0.2, 'srs.daily_capacity' => 8]);
 
         $allowance = function (int $n) {
             $qb = app(QuizBuilderService::class);
@@ -266,23 +273,217 @@ class ReviewSchedulingTest extends TestCase
             return $m->invoke($qb, $n);
         };
 
-        $this->assertSame(3, $allowance(10), 'empty backlog gets the full new-word share');
+        $this->assertSame(2, $allowance(10), 'an empty library gets the full share');
 
-        // exactly one day's worth due is the healthy steady state, not a backlog
+        // the old gate zeroed this out; a backlog is the schedule's problem now
+        for ($i = 0; $i < 200; $i++) {
+            $this->card($user, "word{$i}");
+        }
+        $this->assertSame(2, $allowance(10), 'a backlog does not starve new material');
+
+        $this->assertSame(1, $allowance(5), 'a quiz with a slot to spare always has one');
+        $this->assertSame(0, $allowance(3), 'but a tiny quiz is all review');
+    }
+
+    public function test_a_correct_quiz_answer_does_not_raise_the_ease_factor(): void
+    {
+        $user = User::factory()->create();
+        $this->actingAs($user);
+        $card = $this->card($user, 'invoice', [
+            'ease_factor' => 2.5,
+            'interval_days' => 10,
+            'repetitions' => 4,
+            'next_review_at' => now()->subDay(),
+            'last_reviewed_at' => now()->subDays(10),
+        ]);
+
+        $this->srs->quizCorrect('invoice');
+
+        $card->refresh();
+        $this->assertSame(2.5, (float) $card->ease_factor, 'four options is recognition, not recall');
+        $this->assertGreaterThan(10, $card->interval_days, 'the interval still grows');
+    }
+
+    public function test_pulling_forward_a_deferred_card_keeps_its_interval(): void
+    {
+        $user = User::factory()->create();
+        $this->actingAs($user);
+        // interval ran out 24 days ago; it sits in the future only because
+        // rebalance moved it off a full day
+        $card = $this->card($user, 'invoice', [
+            'interval_days' => 6,
+            'repetitions' => 2,
+            'last_reviewed_at' => now()->subDays(30),
+            'next_review_at' => now()->addDay()->startOfDay(),
+        ]);
+
+        $pulled = $this->srs->pullForward(1);
+
+        $this->assertSame(['invoice'], $pulled);
+        $card->refresh();
+        $this->assertSame(6, $card->interval_days, 'a deferred card keeps what it earned');
+        $this->assertTrue($card->next_review_at->isToday());
+
+        // so the late-review credit grows from the scheduled interval plus half
+        // the overdue time: (6 + 24/2) * 2.5 = 45. Re-anchoring the interval to
+        // the whole 30-day gap would have handed it 75 for free.
+        $this->srs->quizCorrect('invoice');
+        $this->assertSame(45, $card->refresh()->interval_days);
+    }
+
+    public function test_pulling_forward_an_early_card_re_anchors_its_interval(): void
+    {
+        $user = User::factory()->create();
+        $this->actingAs($user);
+        $card = $this->card($user, 'warranty', [
+            'interval_days' => 38,
+            'repetitions' => 5,
+            'lapses' => 1,
+            'ease_factor' => 2.3,
+            'last_reviewed_at' => now()->subDays(5),
+            'next_review_at' => now()->addDays(33)->startOfDay(),
+        ]);
+
+        $this->srs->pullForward(1);
+
+        $card->refresh();
+        $this->assertSame(5, $card->interval_days, 'an early drill only earns the time elapsed');
+        $this->assertTrue($card->next_review_at->isToday());
+        $this->assertSame(1, $card->lapses, 'not a failure');
+        $this->assertSame(2.3, (float) $card->ease_factor);
+    }
+
+    public function test_pull_forward_measures_overdueness_against_the_cards_own_interval(): void
+    {
+        $user = User::factory()->create();
+        $this->actingAs($user);
+
+        // ten times its own interval overdue, and a one-day card: whatever else
+        // is waiting, this is the one closest to being forgotten
+        $this->card($user, 'struggling', [
+            'ease_factor' => 1.5,
+            'interval_days' => 1,
+            'repetitions' => 1,
+            'last_reviewed_at' => now()->subDays(10),
+            'next_review_at' => now()->addDay()->startOfDay(),
+        ]);
+        // barely past a 100-day interval, and sitting nearer in the calendar
+        $this->card($user, 'mature', [
+            'ease_factor' => 2.8,
+            'interval_days' => 100,
+            'repetitions' => 8,
+            'last_reviewed_at' => now()->subDays(101),
+            'next_review_at' => now()->addDays(5)->startOfDay(),
+        ]);
+
+        // ordering by due date, or by overdueness against it, would put the
+        // mature card first: dividing a small lateness by a 100-day interval
+        // looks less urgent than dividing a day's lateness by one day
+        $this->assertSame(['struggling', 'mature'], $this->srs->pullForward(2));
+    }
+
+    public function test_pull_forward_takes_deferred_cards_before_early_ones(): void
+    {
+        $user = User::factory()->create();
+        $this->actingAs($user);
+
+        foreach ([1, 2, 3] as $i) {
+            $this->card($user, "deferred{$i}", [
+                'interval_days' => 6,
+                'repetitions' => 2,
+                'last_reviewed_at' => now()->subDays(30),
+                'next_review_at' => now()->addDays($i)->startOfDay(),
+            ]);
+        }
+        $early = $this->card($user, 'early', [
+            'interval_days' => 60,
+            'repetitions' => 5,
+            'last_reviewed_at' => now()->subDays(2),
+            'next_review_at' => now()->addDays(58)->startOfDay(),
+        ]);
+
+        $pulled = $this->srs->pullForward(3);
+
+        $this->assertSame(['deferred1', 'deferred2', 'deferred3'], $pulled);
+        $this->assertSame(60, $early->refresh()->interval_days, 'the early card was left alone');
+        $this->assertFalse($early->next_review_at->isToday());
+    }
+
+    public function test_a_smart_quiz_drills_the_due_queue_first(): void
+    {
+        $user = User::factory()->create();
+        $this->actingAs($user);
+        config(['srs.daily_capacity' => 5, 'srs.new_word_share' => 0.2]);
+
+        foreach (['invoice', 'shipment', 'warranty'] as $i => $word) {
+            $this->card($user, $word, ['next_review_at' => now()->subDays(10 - $i)]);
+        }
         for ($i = 0; $i < 10; $i++) {
-            $this->card($user, "word{$i}");
+            $this->card($user, "later{$i}", [
+                'interval_days' => 60,
+                'last_reviewed_at' => now()->subDay(),
+                'next_review_at' => now()->addDays(59),
+            ]);
         }
-        $this->assertSame(3, $allowance(10), 'being at capacity does not throttle intake');
 
-        // 10 past capacity = half the gate
-        for ($i = 10; $i < 20; $i++) {
-            $this->card($user, "word{$i}");
-        }
-        $this->assertSame(1, $allowance(10), 'half a gate of excess halves the intake');
+        $picked = app(QuizBuilderService::class)->selectWords(10, 'smart');
 
-        for ($i = 20; $i < 35; $i++) {
+        foreach (['invoice', 'shipment', 'warranty'] as $word) {
+            $this->assertContains($word, $picked, 'due cards come first');
+        }
+    }
+
+    public function test_building_a_quiz_rebalances_the_schedule(): void
+    {
+        $user = User::factory()->create();
+        $this->actingAs($user);
+        config(['srs.daily_capacity' => 5, 'srs.new_word_share' => 0.2]);
+
+        for ($i = 0; $i < 30; $i++) {
             $this->card($user, "word{$i}");
         }
-        $this->assertSame(0, $allowance(10), 'past the gate, no new words at all');
+        $this->assertSame(30, $this->srs->backlogCount($user->id));
+
+        app(QuizBuilderService::class)->selectWords(10, 'smart');
+
+        // nothing else in this deployment ever calls rebalance, so the quiz
+        // build is what has to flatten the calendar
+        $perDay = UserWord::forUser($user->id)
+            ->active()
+            ->where('next_review_at', '>', now())
+            ->get()
+            ->groupBy(fn ($w) => $w->next_review_at->toDateString())
+            ->map->count();
+
+        foreach ($perDay as $day => $count) {
+            $this->assertLessThanOrEqual(5, $count, "day {$day} is over capacity");
+        }
+    }
+    public function test_pull_forward_prefers_the_deferred_pile_over_tomorrows_new_words(): void
+    {
+        $user = User::factory()->create();
+        $this->actingAs($user);
+
+        // just taught, comes due tomorrow — nearer than anything below
+        $taught = $this->card($user, 'fresh', [
+            'interval_days' => 1,
+            'repetitions' => 1,
+            'last_reviewed_at' => now(),
+            'next_review_at' => now()->addDay()->startOfDay(),
+        ]);
+        // overdue for weeks, parked further out by rebalance
+        foreach ([5, 6] as $i => $days) {
+            $this->card($user, "parked{$i}", [
+                'interval_days' => 6,
+                'repetitions' => 3,
+                'last_reviewed_at' => now()->subDays(40),
+                'next_review_at' => now()->addDays($days)->startOfDay(),
+            ]);
+        }
+
+        $pulled = $this->srs->pullForward(2);
+
+        $this->assertSame(['parked0', 'parked1'], $pulled, 'the deferred pile comes first');
+        $this->assertFalse($taught->refresh()->next_review_at->isToday(), 'a word just taught is left alone');
     }
 }

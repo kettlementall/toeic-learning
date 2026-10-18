@@ -9,6 +9,10 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote');
 
 // Keep the review schedule flat: any overdue cards beyond the daily capacity
-// are pushed onto the next days that still have room. Also runs on demand when
-// a review session starts, so this is a safety net rather than the only path.
+// are pushed onto the next days that still have room.
+//
+// Nothing runs the Laravel scheduler in the Docker stack (no cron, no
+// schedule:work), so this line only fires where one is wired up. The live path
+// is on demand: QuizController@store and QuizBuilderService::smartMix rebalance
+// on every quiz build, and ReviewController@session does it via dueWords().
 Schedule::command('srs:rebalance')->dailyAt('03:00');

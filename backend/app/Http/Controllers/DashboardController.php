@@ -21,7 +21,6 @@ class DashboardController extends Controller
 
         $totalWords = UserWord::forUser($userId)->count();
         $dueCount = $this->srs->dueCount();
-        $backlogCount = $this->srs->backlogCount($userId);
         $suspendedCount = UserWord::forUser($userId)->suspended()->count();
         $totalQuizzes = Quiz::where('user_id', $userId)->where('status', 'completed')->count();
 
@@ -96,7 +95,7 @@ class DashboardController extends Controller
             ->values();
 
         return view('dashboard', compact(
-            'totalWords', 'dueCount', 'backlogCount', 'suspendedCount',
+            'totalWords', 'dueCount', 'suspendedCount',
             'totalQuizzes', 'avgAccuracy',
             'recentQuizzes', 'grammarStats', 'posStats', 'leeches', 'aiGrammarFocus'
         ));

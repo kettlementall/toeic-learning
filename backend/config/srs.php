@@ -7,14 +7,24 @@ return [
     | Daily review capacity
     |--------------------------------------------------------------------------
     |
-    | The maximum number of cards a review session will ever surface in one
-    | day. This is the load ceiling the whole scheduler is built around: cards
-    | are spread onto days that still have room, and anything that overflows a
-    | day is pushed forward rather than piling up as "overdue". A backlog can
-    | therefore never grow past this number.
+    | The number of cards a day is expected to carry. Cards are spread onto
+    | days that still have room, and anything that overflows a day is pushed
+    | forward rather than piling up as "overdue" — so the backlog never grows
+    | past this number, provided something actually calls rebalance().
+    |
+    | Quiz creation is what calls it (QuizController@store and
+    | QuizBuilderService::smartMix); nothing runs the Laravel scheduler in this
+    | deployment and the /review page is optional, so the quiz is the surface
+    | that keeps the schedule honest.
+    |
+    | Derive it from the quiz the learner actually takes: one 10-question quiz
+    | leaves `10 - floor(10 * new_word_share)` = 8 slots for reviews. Set this
+    | higher and a residue accumulates that nothing drains. It is not a ceiling
+    | on one sitting — pullForward() makes more cards due when a quiz asks for
+    | more than today holds.
     |
     */
-    'daily_capacity' => 40,
+    'daily_capacity' => 8,
 
     /*
     |--------------------------------------------------------------------------
@@ -46,15 +56,22 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | New word intake gate
+    | New word share
     |--------------------------------------------------------------------------
     |
-    | Quizzes stop mixing in new words while the outstanding review backlog is
-    | at or above this size, and taper the new-word share as it approaches.
-    | Stops new material from being added faster than it can be digested.
+    | The fraction of a quiz given to words the learner has never seen. A flat
+    | guaranteed share, not a budget: quizzes are the only study surface, so
+    | one that carries no new words means the curated TOEIC list never
+    | advances. Quizzes of five or more questions always get at least one.
+    |
+    | This is where intake pressure is set, and it is a real cost: a new word
+    | generates roughly seven reviews over its first few years, so two a day
+    | asks for ~14 review-slots a day that a 10-question quiz does not have.
+    | The schedule absorbs the difference by deferring the least urgent cards
+    | (rebalance), which is a deliberate trade — drill what is closest to being
+    | forgotten, and let the long tail slip — not a backlog to be cleared.
     |
     */
-    'intake_gate' => 120,
-    'new_word_share' => 0.3,
+    'new_word_share' => 0.2,
 
 ];

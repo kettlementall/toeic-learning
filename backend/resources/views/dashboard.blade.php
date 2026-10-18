@@ -11,12 +11,10 @@
     </div>
     <div class="bg-white rounded-xl border p-4">
         <div class="text-3xl font-bold text-amber-500">{{ $dueCount }}</div>
-        <div class="text-sm text-slate-500 mt-1">Today's Queue</div>
-        @if ($backlogCount > $dueCount)
-            <div class="text-xs text-slate-400 mt-0.5">
-                {{ $backlogCount }} outstanding, spread over ~{{ (int) ceil($backlogCount / max($dueCount, 1)) }} days
-            </div>
-        @endif
+        <div class="text-sm text-slate-500 mt-1">In Your Next Quiz</div>
+        <div class="text-xs text-slate-400 mt-0.5">
+            Your quiz drills these first, most urgent first.
+        </div>
     </div>
     <div class="bg-white rounded-xl border p-4">
         <div class="text-3xl font-bold text-emerald-600">{{ $totalQuizzes }}</div>
@@ -30,10 +28,8 @@
 
 <div class="flex flex-wrap gap-3 mb-8">
     <a href="{{ route('words.index') }}" class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700">🔍 Look Up Words</a>
-    @if ($dueCount > 0)
-        <a href="{{ route('review.session') }}" class="px-4 py-2 bg-amber-500 text-white rounded-lg text-sm font-medium hover:bg-amber-600">📖 Start Review ({{ $dueCount }})</a>
-    @endif
     <a href="{{ route('quiz.create') }}" class="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700">📝 Take a Quiz</a>
+    <a href="{{ route('review.session') }}" class="px-4 py-2 text-sm text-slate-500 hover:text-slate-700">Flashcard review (optional)</a>
 </div>
 
 <div class="grid md:grid-cols-2 gap-6">
@@ -98,7 +94,7 @@
                 </div>
             @endforeach
         </div>
-        <a href="{{ route('review.session') }}" class="inline-block mt-3 text-sm text-indigo-600 hover:underline">→ Review these words</a>
+        <p class="text-xs text-slate-400 mt-3">Your quizzes already prioritise these — no extra drilling needed.</p>
     </div>
 @endif
 

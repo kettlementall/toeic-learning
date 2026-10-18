@@ -6,6 +6,7 @@ use App\Services\SpacedRepetitionService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class UserWord extends Model
 {
@@ -35,6 +36,11 @@ class UserWord extends Model
         return $this->belongsTo(User::class);
     }
 
+    public function logs(): HasMany
+    {
+        return $this->hasMany(ReviewLog::class);
+    }
+
     /** Restrict to a given user's words (defaults to the logged-in user). */
     public function scopeForUser(Builder $query, ?int $userId = null): Builder
     {
@@ -60,6 +66,27 @@ class UserWord extends Model
             ->where(fn ($q) => $q->whereNull('lapses')->orWhere('lapses', 0));
     }
 
+    /**
+     * Cards today has not already finished with: never answered at all today,
+     * or answered and **missed**. A miss belongs back in the queue — demote()
+     * returns it to today on purpose — while a word already recalled correctly
+     * has nothing left to give this sitting, so several quizzes in a row keep
+     * finding material instead of re-asking what the last one covered.
+     *
+     * Expressed in SQL rather than as a word list so it stays one query no
+     * matter how long the sitting runs.
+     */
+    public function scopeNotClearedToday(Builder $query): Builder
+    {
+        return $query->where(fn ($q) => $q
+            ->whereDoesntHave('logs', fn ($l) => $l->where('reviewed_at', '>=', today()))
+            ->orWhereHas('logs', fn ($l) => $l
+                ->where('reviewed_at', '>=', today())
+                ->where('quality', '<', 3)
+            )
+        );
+    }
+
     /** Words pulled out of the rotation after failing too many times. */
     public function scopeSuspended(Builder $query): Builder
     {
@@ -74,6 +101,14 @@ class UserWord extends Model
     public function getIsLeechAttribute(): bool
     {
         return $this->lapses >= self::leechThreshold();
+    }
+
+    /** PHP mirror of scopeFreshSearch(), for deciding on an already-loaded card. */
+    public function getIsFreshSearchAttribute(): bool
+    {
+        return $this->source === 'search'
+            && $this->last_reviewed_at === null
+            && (int) ($this->lapses ?? 0) === 0;
     }
 
     public function getIsSuspendedAttribute(): bool
