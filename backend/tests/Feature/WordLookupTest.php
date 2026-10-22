@@ -57,6 +57,50 @@ class WordLookupTest extends TestCase
         $this->assertSame('ai', Word::where('word', 'mechanism')->value('source'));
     }
 
+    public function test_several_words_share_one_ai_call_while_the_dictionary_is_down(): void
+    {
+        Http::fake([
+            'api.dictionaryapi.dev/*' => Http::response('error code: 530', 530),
+            'api.anthropic.com/*' => Http::response(['content' => [['text' => json_encode([
+                'invoice' => ['phonetic' => '/ˈɪnvɔɪs/', 'meanings' => [
+                    ['pos' => 'noun', 'definition_en' => 'A bill for goods.', 'definition_zh' => '發票'],
+                ]],
+                'warranty' => ['phonetic' => '/ˈwɒrənti/', 'meanings' => [
+                    ['pos' => 'noun', 'definition_en' => 'A written guarantee.', 'definition_zh' => '保固'],
+                ]],
+                'zzqx' => ['meanings' => []],   // not a word: dropped
+            ], JSON_UNESCAPED_UNICODE)]]], 200),
+        ]);
+
+        $found = app(\App\Services\DictionaryService::class)
+            ->lookupMany(['invoice', 'warranty', 'zzqx', 'INVOICE']);
+
+        $this->assertSame(['invoice', 'warranty'], array_keys($found));
+        $this->assertSame('發票', $found['invoice']->definition_zh);
+        $this->assertSame('ai', $found['warranty']->source);
+
+        // the point of the batch: three unknown words, one AI round trip
+        $aiCalls = collect(Http::recorded())
+            ->filter(fn ($pair) => str_contains($pair[0]->url(), 'anthropic.com'))
+            ->count();
+        $this->assertSame(1, $aiCalls, 'the words were defined one call at a time');
+    }
+
+    public function test_a_batch_lookup_uses_the_cache_before_asking_anyone(): void
+    {
+        Word::create(['word' => 'invoice', 'definition_en' => 'A bill.', 'definition_zh' => '發票', 'source' => 'seed']);
+        Http::fake([
+            'api.dictionaryapi.dev/*' => Http::response('error code: 530', 530),
+            'api.anthropic.com/*' => Http::response(['content' => [['text' => '{}']]], 200),
+        ]);
+
+        $found = app(\App\Services\DictionaryService::class)->lookupMany(['invoice']);
+
+        $this->assertSame('發票', $found['invoice']->definition_zh);
+        $this->assertSame('seed', $found['invoice']->source, 'a cached word was re-fetched and demoted');
+        Http::assertNothingSent();
+    }
+
     public function test_an_outage_with_no_fallback_reports_the_outage_not_a_typo(): void
     {
         config(['services.anthropic.api_key' => null]);

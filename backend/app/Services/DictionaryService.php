@@ -54,8 +54,78 @@ class DictionaryService
             return $cached; // may be null
         }
 
-        // 3. Claude enrich (Chinese per part of speech + TOEIC usage). The AI
-        //    fallback already carries the Chinese, so it skips the second call.
+        return $this->persist($term, $dict, $cached);
+    }
+
+    /**
+     * Look up several words at once, sharing a single Claude call for
+     * whatever dictionaryapi.dev cannot serve.
+     *
+     * Looking words up one at a time is fine until the dictionary is down,
+     * when each miss costs its own AI round trip: the quiz review page asks
+     * for up to ten at once, which is a minute of waiting on one screen.
+     *
+     * @param  string[]  $terms
+     * @return array<string,Word>  lowercased term => Word; words that could
+     *                             not be resolved are absent
+     */
+    public function lookupMany(array $terms): array
+    {
+        $terms = array_values(array_unique(array_filter(
+            array_map(fn ($t) => trim(strtolower((string) $t)), $terms)
+        )));
+
+        $found = [];
+        $cachedBy = [];
+        $resolved = [];   // term => normalized dictionary entry, ready to persist
+        $unavailable = []; // the dictionary could not answer for these
+
+        foreach ($terms as $term) {
+            $cached = Word::where('word', $term)->first();
+            $cachedBy[$term] = $cached;
+
+            if ($cached && $cached->definition_en) {
+                $found[$term] = $cached;
+
+                continue;
+            }
+
+            $this->upstreamUnavailable = false;
+            $dict = $this->fetchDictionary($term);
+
+            if ($dict) {
+                $resolved[$term] = $dict;
+            } elseif ($this->upstreamUnavailable) {
+                $unavailable[] = $term;
+            } elseif ($cached) {
+                $found[$term] = $cached; // a 404: genuinely not a word
+            }
+        }
+
+        // one call for every word the dictionary could not serve
+        foreach ($this->claude->defineWords($unavailable) as $term => $ai) {
+            $entry = $this->claudeEntry($term, $ai);
+            if ($entry) {
+                $resolved[$term] = $entry;
+            }
+        }
+
+        foreach ($resolved as $term => $dict) {
+            $found[$term] = $this->persist($term, $dict, $cachedBy[$term] ?? null);
+        }
+
+        $this->upstreamUnavailable = false;
+
+        return $found;
+    }
+
+    /**
+     * Enrich a normalized dictionary entry and write it to the cache.
+     */
+    private function persist(string $term, array $dict, ?Word $cached): Word
+    {
+        // Claude enrich (Chinese per part of speech + TOEIC usage). The AI
+        // fallback already carries the Chinese, so it skips the second call.
         $enrich = ($dict['enriched'] ?? false) ? $dict : $this->claude->enrich($term, $dict);
 
         // zip the Chinese translations back onto each meaning (same order)
@@ -192,10 +262,15 @@ class DictionaryService
     private function defineWithClaude(string $term): ?array
     {
         $ai = $this->claude->defineWord($term);
-        if (! $ai) {
-            return null;
-        }
 
+        return $ai ? $this->claudeEntry($term, $ai) : null;
+    }
+
+    /**
+     * Normalize one Claude-written entry into the fetchDictionary() shape.
+     */
+    private function claudeEntry(string $term, array $ai): ?array
+    {
         $meanings = [];
         foreach (($ai['meanings'] ?? []) as $m) {
             if (empty($m['definition_en'])) {

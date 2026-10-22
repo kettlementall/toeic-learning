@@ -90,6 +90,61 @@ PROMPT;
     }
 
     /**
+     * Dictionary entries for several words in one call.
+     *
+     * Same contract as defineWord(), batched. This fallback only runs while
+     * dictionaryapi.dev is down, and the quiz review page can need half a
+     * dozen entries at once — one call each is a minute of staring at a
+     * spinner for a single screen.
+     *
+     * @param  string[]  $words
+     * @return array<string,array>  lowercased word => entry; invalid or
+     *                              missing words are simply absent
+     */
+    public function defineWords(array $words): array
+    {
+        $words = array_values(array_unique(array_filter(
+            array_map(fn ($w) => trim(strtolower((string) $w)), $words)
+        )));
+
+        if (! $this->hasKey() || empty($words)) {
+            return [];
+        }
+
+        if (count($words) === 1) {
+            $entry = $this->defineWord($words[0]);
+
+            return $entry ? [$words[0] => $entry] : [];
+        }
+
+        $list = implode(', ', array_map(fn ($w) => '"'.$w.'"', $words));
+
+        $prompt = <<<PROMPT
+你是多益(TOEIC)英語教學專家兼字典編輯。請提供以下英文單字的字典資料：{$list}
+其中不是真正英文單字的(例如拼錯或亂打)，直接從結果中省略，不要勉強解釋。
+只回傳 JSON，不要其他文字，格式如下(key 為小寫單字本身)：
+{"單字": {"phonetic": "IPA音標，含前後斜線", "meanings": [{"pos": "詞性(noun/verb/adjective/adverb/preposition...)", "definition_en": "簡潔的英文釋義", "definition_zh": "簡潔的繁體中文翻譯", "example": "一句英文例句"}], "toeic_note": "多益常見搭配詞或用法提示(繁體中文，30字內)", "synonyms": "同義字，英文逗號分隔，最多6個", "mnemonic": "記憶小技巧(繁體中文，諧音/字根字首/拆字/聯想擇一，須與字義相關，30字內)"}}
+每個單字的 meanings 每個詞性一條，依常用程度排序，最多4條。
+PROMPT;
+
+        $json = $this->callJson($prompt, min(8192, 900 * count($words)));
+
+        if (! is_array($json)) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($words as $word) {
+            $entry = $json[$word] ?? null;
+            if (is_array($entry) && ! empty($entry['meanings'])) {
+                $out[$word] = $entry + ['valid' => true];
+            }
+        }
+
+        return $out;
+    }
+
+    /**
      * Check a batch of words against the TOEIC vocabulary standard.
      *
      * Judging existing words one by one is a far easier task for the model than

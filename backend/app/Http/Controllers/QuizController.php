@@ -275,15 +275,18 @@ class QuizController extends Controller
                     ->filter()
                     ->map(fn ($w) => strtolower(trim($w)))
                     ->all();
-                foreach (($review['review_words'] ?? []) as $w) {
-                    if (! is_string($w) || trim($w) === '') {
-                        continue;
-                    }
-                    if (in_array(strtolower(trim($w)), $alreadyTested, true)) {
-                        continue; // already graded at submit
-                    }
-                    $entry = $this->dictionary->lookup($w);
-                    if ($entry && $entry->definition_en) {
+                $suggested = collect($review['review_words'] ?? [])
+                    ->filter(fn ($w) => is_string($w) && trim($w) !== '')
+                    ->map(fn ($w) => strtolower(trim($w)))
+                    ->reject(fn ($w) => in_array($w, $alreadyTested, true)) // graded at submit
+                    ->unique()
+                    ->all();
+
+                // one round trip for the lot: with the dictionary API down
+                // each of these would otherwise be its own ~6s AI call, on a
+                // page the learner is sitting and waiting for
+                foreach ($this->dictionary->lookupMany($suggested) as $entry) {
+                    if ($entry->definition_en) {
                         // a suggestion, not a wrong answer: queue it, no lapse
                         $this->srs->queueForReview($entry->word, 'ai_review');
                     }
