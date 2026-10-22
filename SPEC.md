@@ -289,26 +289,51 @@ boost). Drives all dashboard stats and adaptive grammar selection.
   therefore explain by option content, not letter. Applies to all generated
   quiz types (vocab/Part 5/fill-blank/news).
 - **FR-21** Any new `word` referenced by a question is ensured present in the
-  library (`source=quiz_new`, due today) — so it competes for the same daily
-  capacity as everything else from the next day on.
+  library (`source=quiz_new`, due today) — so it joins the back of the queue
+  like anything else.
 - **FR-22** Empty generation ⇒ error banner, no quiz created.
 
 ### 3.4a News-reading quiz (`QuizController::storeNews`, `NewsService`, `ClaudeService::generateNewsQuiz`)
 - **FR-22a** `POST /quiz` with `type=news_reading` and an optional `topic`
-  (`top`\|`world`\|`business`\|`technology`) builds a reading quiz from a recent
-  BBC article. Requires an API key (else error banner, like other AI quizzes).
-- **FR-22b** `NewsService::pickArticle()` reads the topic's BBC RSS feed, skips
+  (`press_release`\|`us_business`\|`business`\|`technology`) builds a reading quiz
+  from a recent article. Feeds are ordered most-TOEIC-like first (Part 7 reads
+  business documents, so corporate press releases sit closest to the exam); an
+  unconfigured `topic` falls back to the first feed, not a fixed key. Requires
+  an API key (else error banner, like other AI quizzes).
+- **FR-22b** `NewsService::pickArticle()` reads the topic's RSS feed, skips
   articles the user already did (matched against recent `news_reading` quizzes'
   `article.url`), and attaches a **reading passage**: best-effort full text
   scraped from the article page (`<p>` extraction, capped ~1800 chars), falling
   back to the RSS summary when scraping fails or yields too little. No usable
   article ⇒ error banner.
+- **FR-22b-i** Passage extraction is scoped to `<article>` when the page has
+  one, so a press-release page's links to *other* releases stay out of the
+  passage; a page without one, or whose `<article>` is too thin to be the body,
+  falls back to the whole document. Paragraphs matching a boilerplate stop-list
+  (newsletter pitches, tip lines, copyright, market-data disclaimers) are
+  dropped individually, so an inline promo costs only itself.
+- **FR-22b-ii** `article.source` is the publisher name, derived from the feed
+  host by `NewsService::sourceFor()`, so adding a feed needs no second config
+  entry. Adding a feed requires checking its article pages survive the `<p>`
+  scrape — a feed that scrapes to nothing degrades silently to the much shorter
+  RSS summary (NPR and Reuters were tried and rejected on this basis).
 - **FR-22c** A single `generateNewsQuiz(title, passage, learnerProfile)` call
   returns, in one shot: a difficulty `level` (1–5) and a `suitable` verdict for
   *this* learner (profile = library size + recent quiz accuracy), a Chinese
   `suitability_note` and `summary`, ~4 reading-comprehension questions, and
   5–8 extracted vocab words. Comprehension questions store neither `word` nor
   `grammar_point`.
+- **FR-22c-i** The question set follows TOEIC Part 7: **the first question is a
+  negative-factual (NOT/True) question**, whose three distractors must each be
+  explicitly stated in the passage and whose answer must be absent from or
+  contradicted by it — the point of the type is per-option verification against
+  the text, so an ambiguous option would make it unanswerable. The remaining
+  three spread across main idea, detail, inference and vocabulary-in-context.
+  Explanations for the NOT question must say where each of the other three
+  appear. Still absent from Part 7 coverage: sentence-insertion, quoted-intent
+  (needs chat-format passages) and multi-passage cross-referencing.
+  Options are shuffled at save, which this type tolerates because its options
+  are content statements and explanations cite option text, never A/B/C/D.
 - **FR-22d** Extracted vocab is added to the library (`addNewsVocab`): each word
   is upserted into the shared `words` cache **without clobbering** a richer
   existing entry, then added to `user_words` with `source=news` and
@@ -530,11 +555,13 @@ Human/Chinese labels are mapped in the dashboard and in
 - `GET {DICTIONARY_API_URL}/{term}`, 15s timeout, no key required. Non-200 or
   malformed responses return the cached word (possibly `null`).
 
-### 5.3 BBC News RSS (`NewsService`)
-- Reads public BBC RSS feeds (`services.news.feeds`, keyed by topic), 15s
-  timeout, **no key required**, browser-like `User-Agent`
+### 5.3 News RSS (`NewsService`)
+- Reads public RSS feeds (`services.news.feeds`, keyed by topic — PR Newswire,
+  CNBC and BBC), 15s timeout, **no key required**, browser-like `User-Agent`
   (`services.news.user_agent`). `recentArticles()` parses RSS items via
-  SimpleXML; `fetchPassage()` best-effort scrapes article `<p>` text. All
+  SimpleXML and HTML-decodes title/summary (feeds double-encode entities, so
+  SimpleXML's own decode leaves a literal `&amp;` behind);
+  `fetchPassage()` best-effort scrapes article `<p>` text. All
   network/parse failures are caught + logged and degrade to an empty list / RSS
   summary, so a flaky feed never 500s the request.
 
@@ -547,7 +574,7 @@ Human/Chinese labels are mapped in the dashboard and in
 | `ANTHROPIC_API_KEY`  | for AI   | —                                                 |
 | `ANTHROPIC_MODEL`    | no       | `claude-sonnet-4-6`                               |
 | `DICTIONARY_API_URL` | no       | `https://api.dictionaryapi.dev/api/v2/entries/en` |
-| `NEWS_FEED_*`        | no       | BBC RSS per topic (`TOP`/`WORLD`/`BUSINESS`/`TECHNOLOGY`) |
+| `NEWS_FEED_*`        | no       | RSS per topic: `PRESS_RELEASE` (PR Newswire), `US_BUSINESS` (CNBC), `BUSINESS`/`TECHNOLOGY` (BBC) |
 | `NEWS_USER_AGENT`    | no       | browser-like UA for fetching RSS/articles         |
 | `DB_*`               | yes      | MySQL (Docker) / SQLite (local)                   |
 

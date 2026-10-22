@@ -11,7 +11,7 @@
     ];
 @endphp
 
-<div class="max-w-xl mx-auto" x-data="{ type: 'vocab_mc', mode: 'smart', topic: 'top', submitting: false }">
+<div class="max-w-xl mx-auto" x-data="{ type: 'vocab_mc', mode: 'smart', topic: 'press_release', submitting: false }">
     <h1 class="text-2xl font-bold mb-1">Create Quiz</h1>
     <p class="text-sm text-slate-500 mb-5">The AI generates questions targeting your weak points and can mix in new words.</p>
 
@@ -41,7 +41,7 @@
                 </label>
                 <label class="cursor-pointer">
                     <input type="radio" name="type" value="news_reading" x-model="type" class="peer hidden">
-                    <div class="text-center text-sm py-2 rounded-lg border peer-checked:bg-indigo-600 peer-checked:text-white peer-checked:border-indigo-600">News Reading (BBC)</div>
+                    <div class="text-center text-sm py-2 rounded-lg border peer-checked:bg-indigo-600 peer-checked:text-white peer-checked:border-indigo-600">News Reading</div>
                 </label>
             </div>
         </div>
@@ -73,9 +73,9 @@
         {{-- news reading topic --}}
         <div x-show="type === 'news_reading'" x-cloak>
             <label class="block text-sm font-semibold mb-2">News Topic</label>
-            <p class="text-xs text-slate-500 mb-2">The AI picks a recent BBC article, judges whether its difficulty fits you, writes ~4 reading questions, and adds useful words to your library.</p>
+            <p class="text-xs text-slate-500 mb-2">The AI picks a recent article, judges whether its difficulty fits you, writes ~4 reading questions, and adds useful words to your library. Press releases read closest to TOEIC Part 7.</p>
             <div class="grid grid-cols-2 gap-1.5 text-sm">
-                @foreach (['top' => 'Top Stories', 'world' => 'World', 'business' => 'Business', 'technology' => 'Technology'] as $val => $label)
+                @foreach (['press_release' => 'Press Releases (PR Newswire)', 'us_business' => 'US Business (CNBC)', 'business' => 'Business (BBC)', 'technology' => 'Technology (BBC)'] as $val => $label)
                     <label class="flex items-center gap-2"><input type="radio" name="topic" value="{{ $val }}" x-model="topic"> {{ $label }}</label>
                 @endforeach
             </div>

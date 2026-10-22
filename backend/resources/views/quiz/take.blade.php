@@ -11,7 +11,7 @@
         <div class="bg-white rounded-xl border p-5 mb-5">
             <div class="flex items-start justify-between gap-3 mb-2">
                 <a href="{{ $a['url'] }}" target="_blank" rel="noopener" class="font-semibold text-indigo-700 hover:underline">{{ $a['title'] }}</a>
-                <span class="shrink-0 text-xs text-slate-400">{{ $a['source'] ?? 'BBC' }}</span>
+                <span class="shrink-0 text-xs text-slate-400">{{ $a['source'] ?? 'News' }}</span>
             </div>
             @if (!empty($a['suitability_note']))
                 <div class="mb-3 rounded-lg px-3 py-2 text-sm {{ ($a['suitable'] ?? true) ? 'bg-emerald-50 border border-emerald-200 text-emerald-800' : 'bg-amber-50 border border-amber-200 text-amber-800' }}">

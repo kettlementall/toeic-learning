@@ -113,14 +113,17 @@ class QuizController extends Controller
     }
 
     /**
-     * Build a BBC news-reading quiz: fetch a recent article, let the AI judge
-     * its difficulty for this learner, generate comprehension questions, and
-     * add the AI-extracted vocab to the learner's library.
+     * Build a news-reading quiz: fetch a recent article for the topic, let the
+     * AI judge its difficulty for this learner, generate comprehension
+     * questions, and add the AI-extracted vocab to the learner's library.
      */
     private function storeNews(string $topic)
     {
         if (! array_key_exists($topic, $this->news->feeds())) {
-            $topic = 'top';
+            $topic = $this->news->defaultTopic();
+            if ($topic === null) {
+                return back()->with('error', 'No news feeds are configured.');
+            }
         }
 
         // avoid re-serving articles this user already read recently
@@ -135,7 +138,7 @@ class QuizController extends Controller
 
         $article = $this->news->pickArticle($topic, $recentUrls);
         if (! $article) {
-            return back()->with('error', 'Could not fetch a suitable BBC article right now. Please try again or pick another topic.');
+            return back()->with('error', 'Could not fetch a suitable article right now. Please try again or pick another topic.');
         }
 
         $generated = $this->claude->generateNewsQuiz(
@@ -157,7 +160,7 @@ class QuizController extends Controller
             'status' => 'pending',
             'total' => count($questions),
             'article' => [
-                'source' => 'BBC',
+                'source' => $this->news->sourceFor($topic),
                 'topic' => $topic,
                 'title' => $article['title'],
                 'url' => $article['url'],

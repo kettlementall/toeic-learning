@@ -6,11 +6,12 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Fetches recent BBC news articles for the news-reading quiz. Uses public RSS
- * feeds (no API key) to list recent items, then best-effort scrapes the article
- * page for the full passage, falling back to the RSS summary when scraping
- * fails. All failures degrade gracefully (empty/null) rather than throwing,
- * mirroring DictionaryService.
+ * Fetches recent articles for the news-reading quiz from the RSS feeds in
+ * config('services.news.feeds') — business news and corporate press releases,
+ * the registers closest to TOEIC Part 7. Uses public RSS (no API key) to list
+ * recent items, then best-effort scrapes the article page for the full passage,
+ * falling back to the RSS summary when scraping fails. All failures degrade
+ * gracefully (empty/null) rather than throwing, mirroring DictionaryService.
  */
 class NewsService
 {
@@ -21,13 +22,46 @@ class NewsService
     private const MAX_PASSAGE_CHARS = 1800;
 
     /**
-     * Topic keys offered to the user, mapped to BBC RSS feeds.
+     * Human-readable publisher names, keyed by the feed host that serves them.
+     * Used only for display, so an unlisted host falls back to its own domain.
+     */
+    private const SOURCE_NAMES = [
+        'prnewswire.com' => 'PR Newswire',
+        'cnbc.com' => 'CNBC',
+        'bbci.co.uk' => 'BBC',
+        'bbc.co.uk' => 'BBC',
+        'bbc.com' => 'BBC',
+    ];
+
+    /**
+     * Topic keys offered to the user, mapped to RSS feed URLs.
      *
      * @return array<string,string>
      */
     public function feeds(): array
     {
         return (array) config('services.news.feeds', []);
+    }
+
+    /**
+     * The topic used when a request names one that isn't configured. Feeds are
+     * ordered most-TOEIC-like first, so the first key is the safest default.
+     */
+    public function defaultTopic(): ?string
+    {
+        return array_key_first($this->feeds());
+    }
+
+    /**
+     * Publisher name to show for a topic, derived from its feed host so adding
+     * a feed needs no second config entry.
+     */
+    public function sourceFor(string $topic): string
+    {
+        $host = parse_url($this->feeds()[$topic] ?? '', PHP_URL_HOST) ?: '';
+        $host = preg_replace('/^(www|feeds|feed)\./', '', strtolower($host)) ?? $host;
+
+        return self::SOURCE_NAMES[$host] ?? ($host !== '' ? $host : 'Unknown');
     }
 
     /**
@@ -119,9 +153,12 @@ class NewsService
                 continue;
             }
             $out[] = [
-                'title' => $title,
+                // Feeds double-encode entities, so SimpleXML's own decode leaves
+                // a literal "&amp;" behind — common in press-release titles,
+                // and it would reach both the quiz title and the AI prompt.
+                'title' => html_entity_decode($title, ENT_QUOTES | ENT_HTML5, 'UTF-8'),
                 'url' => $url,
-                'summary' => trim(strip_tags((string) $item->description)),
+                'summary' => html_entity_decode(trim(strip_tags((string) $item->description)), ENT_QUOTES | ENT_HTML5, 'UTF-8'),
                 'published_at' => trim((string) $item->pubDate) ?: null,
             ];
             if (count($out) >= $limit) {
@@ -156,6 +193,24 @@ class NewsService
     }
 
     /**
+     * Site furniture that survives the length filter because it reads like a
+     * sentence: newsletter pitches, tip lines, copyright and market-data
+     * disclaimers. Matching paragraphs are dropped individually rather than
+     * truncating the rest, so an inline promo mid-article costs only itself.
+     */
+    private const BOILERPLATE = [
+        '/confidential news tip/i',
+        '/sign up for (free|our|the) newsletter/i',
+        '/delivered to your inbox/i',
+        '/all rights reserved/i',
+        '/data is (a real-time snapshot|delayed)/i',
+        '/do not sell or share my personal information/i',
+        '/contributed to this report/i',
+        '/\b(privacy policy|terms of (use|service)|cookie settings)\b/i',
+        '/^(sign up|subscribe|follow us|read more|related:)\b/i',
+    ];
+
+    /**
      * Pull readable paragraph text out of an article's HTML.
      */
     private function extractParagraphs(string $html): ?string
@@ -163,17 +218,18 @@ class NewsService
         // drop script/style blocks so their contents don't leak into the text
         $html = preg_replace('#<(script|style)\b[^>]*>.*?</\1>#is', ' ', $html) ?? $html;
 
-        if (! preg_match_all('#<p\b[^>]*>(.*?)</p>#is', $html, $m)) {
-            return null;
-        }
-
+        // Prefer the <article> element: on press-release pages the page body
+        // also carries links to *other* releases, which would otherwise be
+        // scraped into the same passage. Pages without one (CNBC) fall back to
+        // the whole document, as does an <article> too thin to be the real body.
         $paragraphs = [];
-        foreach ($m[1] as $raw) {
-            $text = trim(html_entity_decode(strip_tags($raw), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
-            $text = preg_replace('/\s+/u', ' ', $text);
-            // keep only real sentences; skip captions, bylines, boilerplate
-            if (mb_strlen($text) >= 40) {
-                $paragraphs[] = $text;
+        if (preg_match('#<article\b[^>]*>(.*?)</article>#is', $html, $scoped)) {
+            $paragraphs = $this->paragraphsIn($scoped[1]);
+        }
+        if (mb_strlen(implode(' ', $paragraphs)) < self::MIN_PASSAGE_CHARS) {
+            $whole = $this->paragraphsIn($html);
+            if (mb_strlen(implode(' ', $whole)) > mb_strlen(implode(' ', $paragraphs))) {
+                $paragraphs = $whole;
             }
         }
 
@@ -195,5 +251,36 @@ class NewsService
         }
 
         return trim($passage);
+    }
+
+    /**
+     * Paragraph texts inside a chunk of HTML: real sentences only, with
+     * captions, bylines and site furniture filtered out.
+     *
+     * @return string[]
+     */
+    private function paragraphsIn(string $html): array
+    {
+        if (! preg_match_all('#<p\b[^>]*>(.*?)</p>#is', $html, $m)) {
+            return [];
+        }
+
+        $paragraphs = [];
+        foreach ($m[1] as $raw) {
+            $text = trim(html_entity_decode(strip_tags($raw), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+            $text = preg_replace('/\s+/u', ' ', $text);
+            // keep only real sentences; skip captions, bylines, boilerplate
+            if (mb_strlen($text) < 40) {
+                continue;
+            }
+            foreach (self::BOILERPLATE as $pattern) {
+                if (preg_match($pattern, $text)) {
+                    continue 2;
+                }
+            }
+            $paragraphs[] = $text;
+        }
+
+        return $paragraphs;
     }
 }

@@ -47,10 +47,18 @@ return [
     ],
 
     'news' => [
-        // BBC RSS feeds keyed by topic. No API key required.
+        // RSS feeds keyed by topic. No API key required. Ordered most to least
+        // TOEIC-like: Part 7 reads business documents, so corporate press
+        // releases sit closest to the exam and general news furthest. The first
+        // entry is the default when a request names an unknown topic.
+        //
+        // Only add a feed whose article pages survive NewsService's paragraph
+        // scrape — NPR and Reuters were tried and dropped (NPR's markup yields
+        // no paragraphs, Reuters' public RSS is gone), and a feed that scrapes
+        // to nothing degrades silently to the much shorter RSS summary.
         'feeds' => [
-            'top' => env('NEWS_FEED_TOP', 'https://feeds.bbci.co.uk/news/rss.xml'),
-            'world' => env('NEWS_FEED_WORLD', 'https://feeds.bbci.co.uk/news/world/rss.xml'),
+            'press_release' => env('NEWS_FEED_PRESS_RELEASE', 'https://www.prnewswire.com/rss/business-technology-latest-news/business-technology-latest-news-list.rss'),
+            'us_business' => env('NEWS_FEED_US_BUSINESS', 'https://www.cnbc.com/id/10001147/device/rss/rss.html'),
             'business' => env('NEWS_FEED_BUSINESS', 'https://feeds.bbci.co.uk/news/business/rss.xml'),
             'technology' => env('NEWS_FEED_TECHNOLOGY', 'https://feeds.bbci.co.uk/news/technology/rss.xml'),
         ],

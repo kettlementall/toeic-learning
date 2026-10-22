@@ -20,6 +20,12 @@ class NewsQuizTest extends TestCase
     {
         config(['services.anthropic.api_key' => 'test-key']);
 
+        // Pin the feed list: these tests assert on scraping and wiring, not on
+        // which publishers happen to ship in config/services.php.
+        config(['services.news.feeds' => [
+            'business' => 'https://feeds.bbci.co.uk/news/business/rss.xml',
+        ]]);
+
         $rss = <<<XML
 <?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"><channel>
@@ -86,7 +92,7 @@ XML;
         $this->actingAs($user);
 
         // 1. generate
-        $res = $this->post('/quiz', ['type' => 'news_reading', 'topic' => 'top']);
+        $res = $this->post('/quiz', ['type' => 'news_reading', 'topic' => 'business']);
         $res->assertRedirect();
 
         $quiz = Quiz::where('user_id', $user->id)->firstOrFail();
@@ -94,6 +100,7 @@ XML;
         $this->assertSame(4, $quiz->total);
         $this->assertNotEmpty($quiz->article['passage']);
         $this->assertSame(3, $quiz->article['level']);
+        $this->assertSame('BBC', $quiz->article['source']);
         $this->assertTrue($quiz->article['suitable']);
         $this->assertCount(4, $quiz->questions);
         $this->assertNull($quiz->questions->first()->word);
@@ -137,13 +144,28 @@ XML;
         $this->assertNotEmpty($quiz->ai_review['summary']);
     }
 
+    /** An unconfigured topic falls back to the first (most TOEIC-like) feed. */
+    public function test_unknown_topic_falls_back_to_default_feed(): void
+    {
+        $this->fakeHttp();
+        $user = User::factory()->create();
+
+        $this->actingAs($user)
+            ->post('/quiz', ['type' => 'news_reading', 'topic' => 'top'])
+            ->assertRedirect();
+
+        $quiz = Quiz::where('user_id', $user->id)->firstOrFail();
+        $this->assertSame('business', $quiz->article['topic']);
+        $this->assertNotEmpty($quiz->article['passage']);
+    }
+
     public function test_news_quiz_requires_api_key(): void
     {
         config(['services.anthropic.api_key' => null]);
         $user = User::factory()->create();
 
         $this->actingAs($user)
-            ->post('/quiz', ['type' => 'news_reading', 'topic' => 'top'])
+            ->post('/quiz', ['type' => 'news_reading', 'topic' => 'business'])
             ->assertRedirect();
 
         $this->assertSame(0, Quiz::count());

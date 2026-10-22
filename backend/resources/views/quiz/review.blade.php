@@ -30,7 +30,7 @@
         <div class="bg-white rounded-xl border p-5 mb-5 text-sm">
             <div class="flex items-start justify-between gap-3 mb-1">
                 <a href="{{ $a['url'] }}" target="_blank" rel="noopener" class="font-semibold text-indigo-700 hover:underline">{{ $a['title'] }}</a>
-                <span class="shrink-0 text-xs text-slate-400">{{ $a['source'] ?? 'BBC' }} · Difficulty {{ $a['level'] ?? '?' }}/5</span>
+                <span class="shrink-0 text-xs text-slate-400">{{ $a['source'] ?? 'News' }} · Difficulty {{ $a['level'] ?? '?' }}/5</span>
             </div>
             @if (!empty($a['summary']))
                 <p class="text-slate-600">{{ $a['summary'] }}</p>
