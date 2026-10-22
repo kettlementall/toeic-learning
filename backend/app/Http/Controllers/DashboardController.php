@@ -20,7 +20,7 @@ class DashboardController extends Controller
         $userId = auth()->id();
 
         $totalWords = UserWord::forUser($userId)->count();
-        $dueCount = $this->srs->dueCount();
+        $dueCount = $this->srs->backlogCount();
         $suspendedCount = UserWord::forUser($userId)->suspended()->count();
         $totalQuizzes = Quiz::where('user_id', $userId)->where('status', 'completed')->count();
 

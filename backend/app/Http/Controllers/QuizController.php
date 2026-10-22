@@ -49,11 +49,6 @@ class QuizController extends Controller
             return back()->with('error', 'ANTHROPIC_API_KEY is not set, so AI quiz generation is unavailable. Add your key to backend/.env and restart.');
         }
 
-        // Quizzes are the only study surface here and nothing runs the Laravel
-        // scheduler, so every quiz build repairs the review schedule. The smart
-        // mix does this too; Part 5 and news quizzes never reach that path.
-        $this->srs->rebalance();
-
         if ($data['type'] === 'news_reading') {
             return $this->storeNews($data['topic'] ?? 'top');
         }

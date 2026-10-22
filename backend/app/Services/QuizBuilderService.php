@@ -82,16 +82,10 @@ class QuizBuilderService
 
     /**
      * Smart mix: the cards closest to being forgotten, plus a fixed share of
-     * new words. This is the only study surface the learner opens, so it also
-     * carries the scheduling work the review page used to trigger.
+     * new words.
      */
     private function smartMix(int $n, array $opts, array $waiting = []): array
     {
-        // repair the schedule first: everything below reads from it, and
-        // nothing else in this deployment ever calls rebalance.
-        $this->srs->rebalance();
-
-        // then size the new-word share against a schedule that is already flat
         $reviewN = $n - $this->newWordAllowance($n);
 
         $review = $this->dueFirstReview($reviewN, intdiv($n, 2), $waiting);
@@ -130,19 +124,17 @@ class QuizBuilderService
     /**
      * The review portion, due-first.
      *
-     * SpacedRepetitionService::dueWords() already rebalances, puts fresh
-     * lookups first, orders the rest by relative overdueness and caps the
-     * result at the daily capacity — so the quiz drills exactly the cards the
-     * review page would have shown, and every slot lands on a card
-     * quizCorrect() will actually reschedule. A card that is not due is only an
-     * early peek: it gets logged and drains nothing.
+     * SpacedRepetitionService::dueWords() puts fresh lookups first, then
+     * anything missed today, then orders by relative overdueness — so the quiz
+     * drills exactly the cards the review page would have shown, and every
+     * slot lands on a card quizCorrect() will actually reschedule.
      *
      * Fresh lookups are held to $freshCap so established cards keep a share.
      *
-     * Once today's queue is spent — a second quiz in one sitting, or a day
-     * already cleared — pullForward() makes the next cards due so the extra
-     * questions keep draining the backlog. weakWords() stays the last resort,
-     * for a library with nothing left to pull.
+     * Once the ripe queue is spent — a second quiz in one sitting, or a small
+     * library already cleared — weakWords() takes over with ordinary practice.
+     * Those answers are logged but change no schedule (see quizCorrect): a
+     * card that is not ripe has nothing to prove by being asked early.
      *
      * @return string[]
      */
@@ -179,13 +171,6 @@ class QuizBuilderService
                 $freshUsed++;
             }
             $picked[] = $uw->word;
-        }
-
-        if (count($picked) < $n) {
-            $picked = array_merge(
-                $picked,
-                $this->srs->pullForward($n - count($picked), array_merge($picked, $held))
-            );
         }
 
         if (count($picked) < $n) {
@@ -230,12 +215,13 @@ class QuizBuilderService
      *
      * A flat share with a floor, not a budget. Quizzes are the only study
      * surface, so one that carries no new words means the curated TOEIC list
-     * never advances. The backlog taper this replaces could not work any more:
-     * rebalance() now runs on every quiz build, which pins the raw backlog at
-     * the daily capacity, so the excess it measured was always zero.
+     * never advances.
      *
-     * Intake pressure is absorbed by the schedule instead — rebalance defers
-     * the least urgent cards — rather than by starving new material.
+     * Note that this is a share of every quiz, so intake scales with how much
+     * the learner studies: ten quizzes a day is ten times the new words, and
+     * each one costs reviews for years. Nothing downstream absorbs that any
+     * more — the queue simply gets longer — so this is the dial that decides
+     * how long the tail grows.
      */
     private function newWordAllowance(int $n): int
     {

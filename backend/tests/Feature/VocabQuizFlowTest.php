@@ -28,7 +28,6 @@ class VocabQuizFlowTest extends TestCase
         parent::setUp();
         config([
             'services.anthropic.api_key' => 'test-key',
-            'srs.daily_capacity' => 8,
             'srs.new_word_share' => 0.2,
         ]);
     }
@@ -64,7 +63,7 @@ class VocabQuizFlowTest extends TestCase
     {
         $words = [];
 
-        // overdue cards, more than one day's capacity so rebalance has work
+        // a pile of overdue cards for the quiz to draw its review portion from
         for ($i = 0; $i < 20; $i++) {
             $words[] = "word{$i}";
             UserWord::create([
@@ -93,7 +92,7 @@ class VocabQuizFlowTest extends TestCase
         return $words;
     }
 
-    public function test_building_a_quiz_repairs_the_schedule_and_draws_from_the_due_queue(): void
+    public function test_building_a_quiz_draws_from_the_due_queue(): void
     {
         $user = User::factory()->create();
         $this->actingAs($user);
@@ -114,17 +113,10 @@ class VocabQuizFlowTest extends TestCase
         $this->assertSame('pending', $quiz->status);
         $this->assertSame(10, $quiz->questions()->count());
 
-        // nothing else in this deployment calls rebalance, so the build must
-        $perDay = UserWord::forUser($user->id)
-            ->active()
-            ->where('next_review_at', '>', now())
-            ->get()
-            ->groupBy(fn ($w) => $w->next_review_at->toDateString())
-            ->map->count();
-
-        foreach ($perDay as $day => $count) {
-            $this->assertLessThanOrEqual(8, $count, "day {$day} is over capacity");
-        }
+        // Building a quiz reschedules nothing — grading does. All 20 are
+        // still ripe (none has been answered yet), plus the 2 new words the
+        // quiz added to the library, which join the queue due now.
+        $this->assertSame(22, $srs->backlogCount($user->id));
 
         // 8 review words off the due queue, 2 new ones from the curated list
         $asked = $quiz->questions()->pluck('word');

@@ -89,58 +89,17 @@ class SpacedRepetitionService
     }
 
     /**
-     * Pick a due date `$intervalDays` out, nudged onto the least loaded day
-     * within the tolerance window so reviews never cluster onto one date.
+     * When this card is ripe again: `$intervalDays` out, and nothing else.
+     *
+     * A date here is a statement about forgetting, not an appointment. Nothing
+     * reads it as "the day this must be done" — the queue serves whatever is
+     * ripe, most urgent first — so there is no calendar to keep flat and no
+     * reason to nudge a card off its own interval. Anchored to `today()`, not
+     * `now()`, so a day is a whole day.
      */
     private function schedule(UserWord $w, int $intervalDays): Carbon
     {
-        $target = Carbon::today()->addDays($intervalDays);
-
-        // learning steps stay exact — moving them defeats the point
-        if ($intervalDays <= 2) {
-            return $target;
-        }
-
-        $slack = (int) floor($intervalDays * (float) config('srs.load_balance_tolerance'));
-        if ($slack < 1) {
-            return $target;
-        }
-
-        $first = Carbon::today()->addDays(max(1, $intervalDays - $slack));
-        $last = Carbon::today()->addDays($intervalDays + $slack);
-
-        $load = $this->dailyLoad($w->user_id, $first, $last, $w->id);
-
-        $best = $target;
-        $bestScore = null;
-        for ($day = $first->copy(); $day->lte($last); $day->addDay()) {
-            $count = $load[$day->toDateString()] ?? 0;
-            // fewest cards wins; ties break toward the intended date
-            $score = [$count, abs($day->diffInDays($target, false))];
-            if ($bestScore === null || $score < $bestScore) {
-                $bestScore = $score;
-                $best = $day->copy();
-            }
-        }
-
-        return $best;
-    }
-
-    /**
-     * How many cards are already scheduled on each day of a date range.
-     *
-     * @return array<string,int>  'Y-m-d' => count
-     */
-    private function dailyLoad(int $userId, Carbon $from, Carbon $to, ?int $excludeId = null): array
-    {
-        return UserWord::forUser($userId)
-            ->active()
-            ->whereBetween('next_review_at', [$from->copy()->startOfDay(), $to->copy()->endOfDay()])
-            ->when($excludeId, fn ($q) => $q->where('id', '!=', $excludeId))
-            ->select(DB::raw('DATE(next_review_at) as d'), DB::raw('COUNT(*) as c'))
-            ->groupBy('d')
-            ->pluck('c', 'd')
-            ->all();
+        return Carbon::today()->addDays($intervalDays);
     }
 
     /**
@@ -167,37 +126,31 @@ class SpacedRepetitionService
     }
 
     /**
-     * Today's review queue: the most urgent cards, never more than the daily
-     * capacity. Rebalances first so an absence turns into a few full days
-     * rather than one impossible pile.
+     * The review queue: everything ripe, most urgent first, and the caller
+     * takes as many as it wants.
      *
-     * $limit overrides the capacity for a caller that is not a day's session —
-     * a quiz asking for its own review portion, where the capacity is the
-     * calendar's unit of work, not a ceiling on one sitting.
+     * There is no daily budget. How much gets reviewed is set by how much the
+     * learner studies — ten quizzes eat ten quizzes' worth of the queue — not
+     * by a number of cards a day apportioned in advance. What a day decides is
+     * only which cards have become ripe, because that is what forgetting runs
+     * on.
+     *
+     * Order: words the learner looked up and has not been tested on, then
+     * anything missed today, then by relative overdueness.
      */
     public function dueWords(?int $userId = null, ?int $limit = null): Collection
     {
         $userId ??= auth()->id();
 
-        $this->rebalance($userId);
-
         return $this->dueQuery($userId)
             ->orderBy($this->priorityExpression())
+            ->orderByRaw($this->missedTodaySql().' DESC', [Carbon::today()])
             ->orderByDesc($this->urgencyExpression())
-            ->limit($limit ?? (int) config('srs.daily_capacity'))
+            ->when($limit, fn ($q) => $q->limit($limit))
             ->get();
     }
 
-    /** Size of today's queue (capped at the daily capacity). */
-    public function dueCount(?int $userId = null): int
-    {
-        return min(
-            $this->backlogCount($userId),
-            (int) config('srs.daily_capacity')
-        );
-    }
-
-    /** Every card currently past its due date, uncapped. */
+    /** Every card currently ripe. */
     public function backlogCount(?int $userId = null): int
     {
         return $this->dueQuery($userId ?? auth()->id())->count();
@@ -213,12 +166,31 @@ class SpacedRepetitionService
 
     /**
      * 0 for words the user just looked up and has not been tested on yet, 1
-     * otherwise. Sorted first, so those words always get today's slots and are
-     * never the ones rebalance pushes forward. Mirrors UserWord::freshSearch().
+     * otherwise. Sorted first, so a word the learner went and asked about is
+     * never buried under the library. Mirrors UserWord::freshSearch().
      */
     private function priorityExpression(): \Illuminate\Database\Query\Expression
     {
         return DB::raw("CASE WHEN source = 'search' AND last_reviewed_at IS NULL AND COALESCE(lapses, 0) = 0 THEN 0 ELSE 1 END");
+    }
+
+    /**
+     * 1 for a card missed today, 0 otherwise — ordered descending, so a miss
+     * comes back round in the same sitting.
+     *
+     * Without this a miss sinks to the bottom of the queue. `demote()` puts it
+     * back on today, which makes it exactly 0 days overdue, while every stale
+     * card in the library is further past its due date and so scores higher on
+     * urgency. In a library of any size that buries the one card whose recall
+     * just measured at zero behind hundreds that are merely late. Relearning
+     * comes before reviewing.
+     *
+     * Returns SQL, not an Expression, because it takes a binding.
+     */
+    private function missedTodaySql(): string
+    {
+        return '(SELECT COUNT(*) FROM review_logs rl'
+            .' WHERE rl.user_word_id = user_words.id AND rl.quality < 3 AND rl.reviewed_at >= ?)';
     }
 
     /**
@@ -234,185 +206,6 @@ class SpacedRepetitionService
         }
 
         return DB::raw('DATEDIFF(NOW(), next_review_at) / GREATEST(interval_days, 1)');
-    }
-
-    /**
-     * How far a card has gone past its own interval, as a multiple of it:
-     * days since its last review over the interval it was given.
-     *
-     * Unlike urgencyExpression() this ignores next_review_at, so it is the one
-     * to order by when every candidate sits in the future. A ratio of 1 or more
-     * means the interval has already elapsed and the card is really overdue
-     * (the SQL side of isDeferred()); under 1 means it is genuinely early. So
-     * ordering by it descending puts the deferred pile first, most overdue
-     * first, and then the early cards, nearest due first. Cards never reviewed
-     * have no ratio and sort last, which is right — pulling a brand new card
-     * forward gains nothing.
-     */
-    private function elapsedRatioExpression(): \Illuminate\Database\Query\Expression
-    {
-        if (DB::connection()->getDriverName() === 'sqlite') {
-            return DB::raw("(julianday(date('now')) - julianday(date(last_reviewed_at))) / max(interval_days, 1)");
-        }
-
-        return DB::raw('DATEDIFF(CURDATE(), DATE(last_reviewed_at)) / GREATEST(interval_days, 1)');
-    }
-
-    /**
-     * Spread any overdue cards beyond today's capacity onto the next days that
-     * still have room. Idempotent and cheap when nothing is overdue, so it can
-     * run on every quiz build and review session — the schedule repairs itself
-     * without a cron, which is the only thing keeping it honest here (nothing
-     * runs the Laravel scheduler, and the review page is optional).
-     *
-     * @return int  number of cards moved
-     */
-    public function rebalance(?int $userId = null): int
-    {
-        $userId ??= auth()->id();
-        $capacity = (int) config('srs.daily_capacity');
-
-        // Only a pile left from earlier days is spread. A card dated today is
-        // today's load, and some land there on purpose — a wrong quiz answer,
-        // a pull-forward, an AI suggestion — so the same day never takes them
-        // back off; they join the stale pile tomorrow if they go untouched.
-        $stale = fn () => UserWord::forUser($userId)
-            ->active()
-            ->where('next_review_at', '<', Carbon::today());
-
-        $overdue = $stale()->count();
-        if ($overdue <= $capacity) {
-            return 0;
-        }
-
-        // keep the most urgent `capacity` cards for today, push the rest
-        $overflow = $stale()
-            ->orderBy($this->priorityExpression())
-            ->orderByDesc($this->urgencyExpression())
-            ->offset($capacity)
-            ->limit($overdue)
-            ->get(['id']);
-
-        // Read the whole stretch of calendar this could touch in one query. A
-        // large pile walks hundreds of days looking for room, and counting each
-        // of them separately turned this into hundreds of queries on a path the
-        // quiz now takes on every build.
-        $day = Carbon::today();
-        $horizon = $day->copy()->addDays(max(60, intdiv($overdue, max(1, $capacity)) + 30));
-        $load = $this->dailyLoad($userId, $day->copy()->addDay(), $horizon);
-
-        $room = 0;
-        $moved = 0;
-
-        foreach ($overflow as $card) {
-            while ($room < 1) {
-                $day->addDay();
-
-                if ($day->greaterThan($horizon)) {
-                    $horizon = $day->copy()->addDays(60);
-                    $load = $this->dailyLoad($userId, $day, $horizon);
-                }
-
-                $room = max(0, $capacity - ($load[$day->toDateString()] ?? 0));
-            }
-
-            UserWord::whereKey($card->id)->update(['next_review_at' => $day->copy()->startOfDay()]);
-            $load[$day->toDateString()] = ($load[$day->toDateString()] ?? 0) + 1;
-            $room--;
-            $moved++;
-        }
-
-        return $moved;
-    }
-
-    /**
-     * Make up to $n more cards due today, nearest scheduled date first.
-     *
-     * Two kinds of card sit in the future and they are not the same thing. One
-     * rebalance deferred for load — its own interval has already elapsed — is
-     * really overdue, so it is only moved back to today: the interval is left
-     * alone and grade()'s late-review credit applies as it should. A card that
-     * is genuinely early instead has its interval re-anchored to the real gap,
-     * so drilling it ahead of time cannot stretch it (same rule as
-     * queueForReview).
-     *
-     * Ordering is by elapsedRatioExpression() — how far past its own interval
-     * each card has gone — so the deferred pile goes first, most overdue first,
-     * and only once it runs out does this reach genuinely early cards, nearest
-     * due first, where the loss is smallest. Ordering by next_review_at or by
-     * urgencyExpression() instead would favour long-interval mature cards that
-     * are barely overdue over short-interval ones many times past their
-     * interval, and would let a word taught minutes ago (due tomorrow, nearer
-     * than the whole deferred pile) be dragged straight back.
-     *
-     * Quizzes use this once today's queue is spent, so the extra questions in a
-     * long sitting keep draining the backlog instead of logging early peeks.
-     *
-     * @param  string[]  $exclude  words already picked
-     * @return string[]  the words made due
-     */
-    public function pullForward(int $n, array $exclude = [], ?int $userId = null): array
-    {
-        $userId ??= auth()->id();
-
-        if ($n < 1) {
-            return [];
-        }
-
-        $today = Carbon::today();
-
-        $cards = UserWord::forUser($userId)
-            ->active()
-            ->notClearedToday()
-            ->when($exclude, fn ($q) => $q->whereNotIn('word', $exclude))
-            ->where('next_review_at', '>', $today)
-            ->orderByDesc($this->elapsedRatioExpression())
-            ->orderBy('next_review_at')
-            ->limit($n)
-            ->get();
-
-        $pulled = [];
-
-        foreach ($cards as $uw) {
-            if (! $this->isDeferred($uw)) {
-                $uw->interval_days = $this->elapsedInterval($uw) ?? $uw->interval_days;
-            }
-
-            $uw->next_review_at = $today->copy();
-            $uw->save();
-
-            $pulled[] = $uw->word;
-        }
-
-        return $pulled;
-    }
-
-    /**
-     * Whether this card's own interval has already run out — it is scheduled
-     * in the future only because rebalance moved it off a full day.
-     */
-    private function isDeferred(UserWord $w): bool
-    {
-        if (! $w->last_reviewed_at) {
-            return false;
-        }
-
-        return $w->last_reviewed_at->copy()->startOfDay()
-            ->addDays(max(1, (int) $w->interval_days))
-            ->lessThanOrEqualTo(Carbon::today());
-    }
-
-    /**
-     * The interval an early review has actually earned: days since the last
-     * one. Null for a card with no review to measure from.
-     */
-    private function elapsedInterval(UserWord $w): ?int
-    {
-        if (! $w->last_reviewed_at || $w->repetitions < 1) {
-            return null;
-        }
-
-        return max(1, (int) $w->last_reviewed_at->copy()->startOfDay()->diffInDays(Carbon::today()));
     }
 
     /**
@@ -491,6 +284,23 @@ class SpacedRepetitionService
         $uw->save();
 
         return $uw;
+    }
+
+    /**
+     * The interval an early review has actually earned: days since the last
+     * one. Null for a card with no review to measure from.
+     *
+     * Pulling a card forward must not stretch it. Grading it on an interval it
+     * never served would read as evidence the memory survived that long, when
+     * all it survived is the shorter gap.
+     */
+    private function elapsedInterval(UserWord $w): ?int
+    {
+        if (! $w->last_reviewed_at || $w->repetitions < 1) {
+            return null;
+        }
+
+        return max(1, (int) $w->last_reviewed_at->copy()->startOfDay()->diffInDays(Carbon::today()));
     }
 
     /** Whether this card already recorded a failure today. */

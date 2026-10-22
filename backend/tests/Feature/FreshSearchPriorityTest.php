@@ -110,10 +110,9 @@ class FreshSearchPriorityTest extends TestCase
         $this->assertSame(['fresh'], UserWord::forUser()->freshSearch()->pluck('word')->all());
     }
 
-    public function test_searched_words_lead_the_review_queue_and_are_never_pushed_back(): void
+    public function test_searched_words_lead_the_review_queue(): void
     {
         $user = User::factory()->create();
-        config(['srs.daily_capacity' => 5]);
         $srs = app(SpacedRepetitionService::class);
 
         // far more urgent by overdueness, but they must not crowd out new lookups
@@ -125,20 +124,14 @@ class FreshSearchPriorityTest extends TestCase
 
         $queue = $srs->dueWords($user->id)->pluck('word')->all();
 
-        $this->assertCount(5, $queue);
         $this->assertSame(['invoice', 'warranty'], array_slice($queue, 0, 2));
-        $this->assertTrue(
-            UserWord::forUser($user->id)->freshSearch()->get()
-                ->every(fn ($w) => $w->next_review_at <= now()),
-            'rebalance left the searched words due today'
-        );
     }
 
     public function test_a_second_quiz_in_one_sitting_still_drills_real_reviews(): void
     {
         $user = User::factory()->create();
         $this->actingAs($user);
-        config(['srs.daily_capacity' => 3, 'srs.new_word_share' => 0.2]);
+        config(['srs.new_word_share' => 0.2]);
 
         for ($i = 0; $i < 25; $i++) {
             $this->card($user, "word{$i}", ['next_review_at' => now()->subDays(5)]);
@@ -150,10 +143,8 @@ class FreshSearchPriorityTest extends TestCase
         $this->persistAsPendingQuiz($user, $first);
         $second = $builder->selectWords(10, 'smart');
 
-        // The daily capacity caps what a *day* is expected to carry, not what
-        // one sitting can drill: the review portion is filled from the due
-        // queue past that cap, and pullForward() makes more cards due when the
-        // queue itself runs out. Either way every slot lands on a due card,
+        // Nothing rations a sitting: both quizzes fill their review portion
+        // straight off the ripe queue, and every slot lands on a ripe card,
         // which is the only kind quizCorrect() will reschedule.
         foreach ([$first, $second] as $i => $picked) {
             $due = UserWord::forUser($user->id)
@@ -191,7 +182,7 @@ class FreshSearchPriorityTest extends TestCase
     {
         $user = User::factory()->create();
         $this->actingAs($user);
-        config(['srs.daily_capacity' => 4, 'srs.new_word_share' => 0.2]);
+        config(['srs.new_word_share' => 0.2]);
         $srs = app(SpacedRepetitionService::class);
         $builder = app(QuizBuilderService::class);
 
@@ -221,7 +212,7 @@ class FreshSearchPriorityTest extends TestCase
     {
         $user = User::factory()->create();
         $this->actingAs($user);
-        config(['srs.daily_capacity' => 4, 'srs.new_word_share' => 0.2]);
+        config(['srs.new_word_share' => 0.2]);
         $srs = app(SpacedRepetitionService::class);
         $builder = app(QuizBuilderService::class);
 
@@ -257,7 +248,7 @@ class FreshSearchPriorityTest extends TestCase
     {
         $user = User::factory()->create();
         $this->actingAs($user);
-        config(['srs.daily_capacity' => 4, 'srs.new_word_share' => 0.2]);
+        config(['srs.new_word_share' => 0.2]);
 
         for ($i = 0; $i < 30; $i++) {
             $this->card($user, "word{$i}", ['next_review_at' => now()->subDays(5)]);

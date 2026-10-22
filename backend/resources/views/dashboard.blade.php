@@ -11,9 +11,9 @@
     </div>
     <div class="bg-white rounded-xl border p-4">
         <div class="text-3xl font-bold text-amber-500">{{ $dueCount }}</div>
-        <div class="text-sm text-slate-500 mt-1">In Your Next Quiz</div>
+        <div class="text-sm text-slate-500 mt-1">Ready to Review</div>
         <div class="text-xs text-slate-400 mt-0.5">
-            Your quiz drills these first, most urgent first.
+            Your quizzes work through these, most urgent first.
         </div>
     </div>
     <div class="bg-white rounded-xl border p-4">

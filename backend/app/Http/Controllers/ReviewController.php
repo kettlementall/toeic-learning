@@ -8,14 +8,18 @@ use Illuminate\Http\Request;
 
 class ReviewController extends Controller
 {
+    /** Cards in one flashcard sitting. A UI choice, not a scheduling one. */
+    private const SESSION_SIZE = 20;
+
     public function __construct(private SpacedRepetitionService $srs)
     {
     }
 
     public function session()
     {
-        // dueWords() rebalances first, so the queue is always a day's worth
-        $words = $this->srs->dueWords()->load('dictionary');
+        // One sitting's worth off the front of the queue. Nothing apportions
+        // the rest across days — the backlog is just what is ripe.
+        $words = $this->srs->dueWords(limit: self::SESSION_SIZE)->load('dictionary');
         $backlog = $this->srs->backlogCount();
 
         return view('review.session', compact('words', 'backlog'));

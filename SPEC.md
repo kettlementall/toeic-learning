@@ -215,23 +215,22 @@ boost). Drives all dashboard stats and adaptive grammar selection.
 - **FR-11** Due = `next_review_at <= now`, **minus the cards today has already
   finished with** (`UserWord::notClearedToday()`: a word answered correctly
   today drops out; one answered and *missed* stays, because `demote()` put it
-  back on today on purpose). The queue is built by `dueWords()`:
-  it **rebalances first** (§4.1b), then orders by *priority* (words the user
-  looked up and has not been tested on lead — `UserWord::freshSearch()`), then
-  by *relative overdueness* (`elapsed / interval`, so a 2-day card a week late
-  beats a 200-day card a week late), capped at `srs.daily_capacity`.
-  `dueCount()` is `min(backlogCount(), daily_capacity)` — the number shown in
-  the UI; `backlogCount()` is the uncapped count of everything past due. Both
-  therefore shrink as a sitting clears words. `dueWords()` takes an optional
-  limit for a caller that is not a day's session — a quiz asking for its own
-  review portion, where the capacity is the calendar's unit of work rather than
-  a ceiling on one sitting.
-- **FR-11a** `GET /review` renders that queue as flashcards. It is an
-  **optional** surface: quizzes (§3.4) drill the same cards and are what drives
-  rebalancing. Nothing runs the Laravel scheduler in the Docker stack, so
-  `routes/console.php`'s nightly `srs:rebalance` only fires where one is wired
-  up — the live path is `QuizController@store` and
-  `QuizBuilderService::smartMix()`, both of which rebalance on every build.
+  back on today on purpose). `dueWords()` orders that queue by, in turn:
+  *priority* (words the user looked up and has not been tested on lead —
+  `UserWord::freshSearch()`), *missed today* (a card that just failed is
+  relearning, and must not sit behind every stale card in the library), then
+  *relative overdueness* (`elapsed / interval`, so a 2-day card a week late
+  beats a 200-day card a week late).
+  **There is no daily quota.** The caller passes the limit it wants and takes
+  that much off the front; how much gets reviewed is set by how much the
+  learner studies, not apportioned per day in advance. `backlogCount()` is
+  everything ripe, and it is what the dashboard shows.
+- **FR-11a** `GET /review` renders the front of that queue as flashcards, a
+  sitting at a time (`ReviewController::SESSION_SIZE`, a UI choice and not a
+  scheduling one). It is an **optional** surface: quizzes (§3.4) drill the same
+  cards. Nothing anywhere runs on a timer — no cron, no queue worker, no
+  nightly job — because nothing needs to: the queue is a query, so it is always
+  current the moment it is read.
 - **FR-12** `POST /review/{userWord}/grade` with `quality` 0-5 applies SM-2 (see
   §4.1) and returns `{ok, next_review_at, interval_days, suspended}` as JSON.
 - **FR-13** Every grade writes a `review_log` (denormalizing the word's category
@@ -245,21 +244,11 @@ boost). Drives all dashboard stats and adaptive grammar selection.
   library due today; an existing one is pulled to today with its interval
   re-anchored to the real gap since its last review, so the early look cannot
   stretch it. Suspended and already-due cards are left alone.
-- **FR-14b** `pullForward(n, exclude)` makes up to `n` more cards due today and
-  returns the words. It distinguishes two kinds of future card: one **rebalance
-  deferred** for load (its own interval has already elapsed) is only moved back
-  to today, interval untouched, so §4.1's late-review credit applies; a
-  **genuinely early** card has its interval re-anchored like FR-14a. Deferred
-  cards therefore go first — most overdue relative to their own interval first,
-  since drilling those costs nothing — and only then genuinely early ones,
-  nearest due first, where the loss is smallest. The measure is days since the
-  card's last review over the interval it was given, **not** lateness against
-  `next_review_at`: every candidate here sits in the future, so the latter is
-  negative and dividing it by a long interval would rank a barely-overdue mature
-  card above a one-day card ten times past its interval. Without that split a long
-  sitting recycles the words it has just taught (due tomorrow, nearer than the
-  deferred pile) instead of working through the pile. Quizzes use it once
-  today's queue is spent.
+- **FR-14b** *(withdrawn.)* `pullForward()` is gone. Nothing drags an unripe
+  card into today: studying harder empties the queue faster, but it cannot make
+  a card ripe sooner, because forgetting runs on elapsed time and not on
+  effort. A sitting that exhausts the queue falls through to ordinary practice
+  (`weakWords()`), which is logged and reschedules nothing — see §4.1b.
 - **FR-14c** One bad day costs one lapse: `lapsedToday()` suppresses the second
   and later ease/lapse penalties on the same card on the same day, however they
   arrive (quiz miss, "Forgot" in review, AI flag).
@@ -275,16 +264,11 @@ boost). Drives all dashboard stats and adaptive grammar selection.
   `mode` (string), `count` 1–20, optional `category`, `level` 1–5, `points[]`,
   `topic`.
 - **FR-17** Requires an API key; otherwise returns with an error banner.
-- **FR-17a** Every quiz build **rebalances the review schedule** before
-  selecting anything (`QuizController@store`, and again in `smartMix()` so the
-  ordering is explicit). Quizzes are the only surface guaranteed to be opened,
-  and nothing else in this deployment calls `rebalance()` — see FR-11a.
 - **FR-18** **Vocab/fill-blank**: `QuizBuilderService::selectWords()` chooses
   words by mode (§4.2), then Claude generates one question per word. The smart
-  mix sources its review portion **due-first** from `dueWords()`, tops up with
-  `pullForward()` (FR-14b) when today's queue is spent, and only then falls back
-  to weighted sampling — so a quiz slot lands on a card the schedule will
-  actually advance.
+  mix sources its review portion **due-first** from `dueWords()` and falls back
+  to weighted sampling only when the queue is spent — so a quiz slot lands on a
+  card the schedule will actually advance.
 - **FR-18a** Quizzes in one sitting do not tread on each other, in **both**
   `smart` and `weak` modes. Words answered correctly today are out of the due
   queue altogether (FR-11); on top of that, words sitting in a quiz **built
@@ -373,9 +357,10 @@ boost). Drives all dashboard stats and adaptive grammar selection.
   map to no vocab word or grammar point.
 
 ### 3.7 Dashboard (`DashboardController`)
-- **FR-29** Cards: total words, "In Your Next Quiz" (`dueCount()`), completed
-  quizzes, average accuracy. The copy says the quiz drills these — the review
-  page is offered as an optional flashcard drill, not as work owed.
+- **FR-29** Cards: total words, "Ready to Review" (`backlogCount()` — the real
+  number of ripe cards, not a day's ration), completed quizzes, average
+  accuracy. The copy says the quizzes work through these — the review page is
+  offered as an optional flashcard drill, not as work owed.
 - **FR-30** Recent score trend (last 10 completed quizzes, chronological).
 - **FR-31** Grammar weakness ranking: per `grammar_point`, error rate =
   `wrong/total` where wrong = `quality<3`, sorted desc.
@@ -424,43 +409,50 @@ plus half of however long the card actually survived past its due date
 (`scheduled + (elapsed - scheduled) / 2`). Recalling a card that was overdue
 proves the interval was too short.
 
-### 4.1a Load-balanced scheduling (`schedule`)
-A due date `interval` days out is nudged onto the least loaded day within
-±`srs.load_balance_tolerance × interval` (a 100-day interval with 0.15 may move
-±15 days), so a batch graded together does not all come due on one date. Cards
-in the 1–2 day learning steps are never moved. Dates are anchored to
-`today()`, not `now()`, so a day is a whole day.
+### 4.1a Scheduling (`schedule`)
+`today() + interval`, and nothing else. A date says when the card is ripe, not
+when it must be done, so there is no calendar to flatten and no reason to nudge
+a card off its own interval. Anchored to `today()`, not `now()`, so a day is a
+whole day.
 
-### 4.1b Rebalancing (`rebalance`)
-Keeps the queue finishable without losing anything:
+### 4.1b No daily budget
+Nothing apportions cards across days. There is no capacity, no rebalancing, no
+calendar to keep flat — the review queue is a query (FR-11) and the learner
+takes as much of it as they study. Ten quizzes eat ten quizzes' worth; one eats
+one.
 
-- Only cards dated **before today** are candidates. A card dated today is
-  today's load, and some land there deliberately (`demote`, `queueForReview`,
-  `pullForward`), so the same day never takes them back off; they join the
-  stale pile tomorrow if left untouched.
-- The most urgent `srs.daily_capacity` of that pile stay (priority then
-  relative overdueness, as FR-11); the rest are pushed onto the next days that
-  still have room, one `dailyLoad()` query covering the whole stretch.
-- It only ever moves cards **forward**, never back, so an absence turns into a
-  few full days rather than one impossible wall, and it is idempotent.
+This is deliberate and it replaced a scheduler that did assign every card a
+future date. Doing so forces a second question — *how do I spread 500 overdue
+cards across the days ahead?* — whose answer needs a daily capacity, a
+rebalancer, load-balanced due dates, and a way to pull cards back when the
+capacity was wrong. All of that was machinery for a question that only existed
+because the dates were being assigned. Removing it removed the question.
+
+What a day still decides is which cards are **ripe**, because that is what
+forgetting runs on. Hence the one rule that cannot bend:
+
+> Studying harder empties the queue faster. It does not make a card ripe
+> sooner.
+
+`quizCorrect()` enforces it — a correct answer on a card that is not ripe is
+logged for stats and changes no schedule — because grading an early look would
+read as evidence the memory survived an interval it never served, and inflate
+that interval on a false result.
 
 ### 4.2 Word selection for quizzes (`QuizBuilderService::selectWords`)
 - **`smart`** (smart mix, the default):
-  1. `rebalance()` — repair the schedule first (FR-17a).
-  2. `newWordAllowance()` = `floor(n × srs.new_word_share)`, with a floor of 1
+  1. `newWordAllowance()` = `floor(n × srs.new_word_share)`, with a floor of 1
      for quizzes of 5+ questions. A flat guaranteed share: quizzes are the only
      study surface, so one that carries no new words means the curated list
-     never advances. (The old backlog taper was removed — rebalancing on every
-     build pins the backlog at the capacity, so its excess was always 0.)
-  3. *Review portion* = `dueFirstReview()`: take from `dueWords()` with a
-     window wider than the portion (§4.1b ordering; fresh lookups capped at
-     half the quiz so established cards keep a share), then `pullForward()` for
-     whatever is still missing, then `weakWords()` as a last resort. Words held
-     back — lookups past the cap, plus what FR-18a holds for this sitting — are
-     kept out of all three. The window matters: with a limit of exactly the
-     portion size, every skipped word would cost a slot and the quiz would
-     reach for future cards while genuinely due ones sat just past the cap.
-  4. Topped up with random library words, then *new portion* = `newWords()`,
+     never advances. Note it is a share of *every quiz*, so intake scales with
+     how much the learner studies — see §6.1.
+  2. *Review portion* = `dueFirstReview()`: take from `dueWords()` with a
+     window wider than the portion (FR-11 ordering; fresh lookups capped at
+     half the quiz so established cards keep a share), then `weakWords()` as a
+     last resort. Words held back — lookups past the cap, plus what FR-18a
+     holds for this sitting — are kept out of both. The window matters: with a
+     limit of exactly the portion size, every skipped word would cost a slot.
+  3. Topped up with random library words, then *new portion* = `newWords()`,
      then a final fill from the `words` catalog; truncated to `n`.
 - **`weak`**: fresh lookups (capped at half the quiz) + `weakWords()` for the
   rest, with the lookups past the cap excluded from the sampling.
@@ -566,15 +558,16 @@ Config keys live in `config/services.php` under `anthropic.*`,
 
 | Key                      | Default | Meaning                                                      |
 |--------------------------|---------|--------------------------------------------------------------|
-| `daily_capacity`         | 8       | Cards a day is expected to carry (§4.1b). Derived from the quiz actually taken: `quiz size − floor(quiz size × new_word_share)`. Not a ceiling on one sitting — `pullForward()` makes more cards due when a quiz asks for more. |
 | `new_word_share`         | 0.2     | Fraction of a quiz given to unseen words; floor of 1 for quizzes of 5+ (§4.2). |
-| `load_balance_tolerance` | 0.15    | Slack for nudging a due date onto a quieter day (§4.1a).     |
 | `leech_flag_at`          | 4       | Lapses at which a word is flagged on the dashboard (FR-15).  |
 | `leech_suspend_at`       | 8       | Lapses at which it is suspended out of the rotation.         |
 
-A new word costs roughly seven reviews over its first few years, so the
-new-word share is the real intake dial: raising it does not create review
-capacity, it borrows it from the existing library (§9).
+`new_word_share` is the only dial here, and it is the one that matters. It is
+a share of **every quiz**, so intake scales with study: ten quizzes a day is
+ten times the new words. A new word costs roughly seven reviews over its first
+few years, and nothing downstream absorbs that any more — the queue simply
+grows — so raising it does not buy more learning, it lengthens the tail of
+words waiting their turn (§9).
 
 ---
 
@@ -609,12 +602,16 @@ unique key from `word` to `(user_id, word)`.
 ---
 
 ## 9. Known Limitations / Future Work
-- **Nothing runs the Laravel scheduler** in the Docker stack (no cron, no
-  `schedule:work`), so `rebalance()` is driven by quiz creation and, when
-  opened, the review page. A deployment that never creates a quiz never
-  rebalances.
+- **Demand can exceed what anyone can study.** Summing `1 / interval` over a
+  library gives the reviews a day it would take to keep every card on time; a
+  library where most cards sit at interval 0–1 (never passed, or in a learning
+  step) asks for far more than a person does. Dropping the daily budget (§4.1b)
+  does not change that arithmetic, it just stops it presenting as a wall: the
+  queue is ordered by urgency, so the overflow is a tail that waits rather than
+  cards exiled to a date. The dials are intake (`new_word_share`, §6.1) and
+  leech handling (FR-15), never the scheduler.
 - All of the "today" rules — FR-11's cleared-today, FR-18a's unfinished quiz,
-  FR-14b's deferred/early split, §4.1b's stale pile — key off `today()` in the
+  FR-11's missed-today ordering — key off `today()` in the
   **app timezone, which is UTC**. For a learner in UTC+8 the day therefore rolls
   over at 08:00 local, so a sitting that spans that hour sees the rules reset
   mid-way. Changing `config/app.php` would reinterpret every stored
@@ -622,18 +619,17 @@ unique key from `word` to `(user_id, word)`.
   not a config tweak. The ordering expressions read the **database** clock
   (`NOW()`, `CURDATE()`) while the PHP side reads the app's, so the two
   containers must agree on a timezone; they do today (both UTC).
-- A long sitting is bounded only by the library, not by `daily_capacity`:
-  measured on a 608-card library shaped like a real one, 60 consecutive
-  10-question quizzes drilled 482 distinct words and graded 480 cards with no
-  question landing on a card the schedule would not advance; the 118 repeats
-  were the deliberate re-drill of missed words, none seen more than twice.
-- **Intake runs a structural deficit by design.** A 10-question quiz offers ~8
-  review slots against ~8/day of demand from an existing 700-word library, so
-  every new word is borrowed capacity. The scheduler absorbs this by deferring
-  the least urgent cards — the app drills what is closest to being forgotten
-  rather than maintaining everything ever added, and the long tail is
-  deliberately allowed to slip. Closing the gap is a matter of quiz volume or a
-  smaller library, not scheduling.
+- A long sitting is bounded only by the library: measured on a 608-card
+  library shaped like a real one, 60 consecutive 10-question quizzes drilled
+  482 distinct words and graded 480 cards with no question landing on a card
+  the schedule would not advance; the 118 repeats were the deliberate re-drill
+  of missed words, none seen more than twice.
+- **Intake runs a structural deficit by design.** Every quiz carries new
+  words, and each costs reviews for years, so a library grows demand faster
+  than a learner grows throughput. Nothing absorbs that: the app drills what is
+  closest to being forgotten and the long tail waits, which is the intended
+  trade rather than a backlog to clear. Closing the gap is a matter of quiz
+  volume, intake (§6.1), or a smaller library — never scheduling.
 - Parked/suspended words are indistinguishable from auto-suspended leeches
   (one `suspended_at` column, no `suspend_reason`).
 - Quiz generation is synchronous (request blocks up to ~90s on the AI call); a
