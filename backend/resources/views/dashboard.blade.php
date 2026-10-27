@@ -26,6 +26,66 @@
     </div>
 </div>
 
+{{-- rough TOEIC Reading estimate --}}
+@php
+    $est = $scoreEstimate;
+    $c = $est['components'];
+    $pct = fn ($p) => $p === null ? '—' : round($p * 100).'%';
+    $hintLabel = [
+        'news_reading' => 'a News Reading (Part 7) quiz',
+        'part5_grammar' => 'a Part 5 Grammar quiz',
+        'vocab_mc' => 'a Vocabulary quiz',
+    ][$est['hint']] ?? null;
+    $confStyle = [
+        'high' => 'bg-emerald-100 text-emerald-700',
+        'medium' => 'bg-amber-100 text-amber-700',
+        'low' => 'bg-slate-100 text-slate-600',
+    ][$est['confidence'] ?? 'low'];
+@endphp
+<div class="bg-white rounded-xl border p-5 mb-8">
+    <div class="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 class="font-semibold">📈 Estimated TOEIC Reading Score</h2>
+        @if ($est['status'] === 'ok')
+            <span class="text-xs px-2 py-0.5 rounded-full {{ $confStyle }}">{{ ucfirst($est['confidence']) }} confidence</span>
+        @endif
+    </div>
+
+    @if ($est['status'] === 'ok')
+        <div class="mt-2">
+            <span class="text-4xl font-bold text-indigo-600">{{ $est['score'] }}</span>
+            <span class="text-slate-400">/ 495</span>
+            <span class="text-sm text-slate-500 ml-2">likely {{ $est['low'] }}–{{ $est['high'] }}</span>
+        </div>
+    @else
+        <p class="text-sm text-slate-500 mt-2">Not enough answers yet to estimate a score.</p>
+    @endif
+
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-4 text-sm">
+        <div class="bg-slate-50 rounded-lg px-3 py-2">
+            <div class="text-slate-500">Part 5 grammar</div>
+            <div class="font-medium">{{ $pct($c['p5']) }} <span class="text-xs text-slate-400">({{ $c['n5'] }} questions)</span></div>
+        </div>
+        <div class="bg-slate-50 rounded-lg px-3 py-2">
+            <div class="text-slate-500">Part 7 reading</div>
+            <div class="font-medium">{{ $pct($c['p7']) }} <span class="text-xs text-slate-400">({{ $c['n7'] }} questions)</span></div>
+        </div>
+        <div class="bg-slate-50 rounded-lg px-3 py-2">
+            <div class="text-slate-500">New words already known</div>
+            <div class="font-medium">{{ $pct($c['pv']) }} <span class="text-xs text-slate-400">({{ $c['nv'] }} words)</span></div>
+        </div>
+    </div>
+
+    @if ($hintLabel)
+        <p class="text-sm text-slate-500 mt-3">
+            To sharpen the estimate, take <a href="{{ route('quiz.create') }}" class="text-indigo-600 hover:underline">{{ $hintLabel }}</a>.
+        </p>
+    @endif
+    <p class="text-xs text-slate-400 mt-2">
+        A rough guess from your practice answers over the last {{ config('toeic_estimate.window_days') }} days, not an official score.
+        Listening is not included — nothing here tests it.
+    </p>
+</div>
+
 <div class="flex flex-wrap gap-3 mb-8">
     <a href="{{ route('words.index') }}" class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700">🔍 Look Up Words</a>
     <a href="{{ route('quiz.create') }}" class="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700">📝 Take a Quiz</a>

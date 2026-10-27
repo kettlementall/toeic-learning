@@ -6,13 +6,16 @@ use App\Models\Quiz;
 use App\Models\ReviewLog;
 use App\Models\UserWord;
 use App\Services\QuizBuilderService;
+use App\Services\ScoreEstimateService;
 use App\Services\SpacedRepetitionService;
 use Illuminate\Support\Facades\DB;
 
 class DashboardController extends Controller
 {
-    public function __construct(private SpacedRepetitionService $srs)
-    {
+    public function __construct(
+        private SpacedRepetitionService $srs,
+        private ScoreEstimateService $estimator,
+    ) {
     }
 
     public function index()
@@ -94,10 +97,14 @@ class DashboardController extends Controller
             ->unique()
             ->values();
 
+        // rough Reading score from real quiz answers
+        $scoreEstimate = $this->estimator->estimate($userId);
+
         return view('dashboard', compact(
             'totalWords', 'dueCount', 'suspendedCount',
             'totalQuizzes', 'avgAccuracy',
-            'recentQuizzes', 'grammarStats', 'posStats', 'leeches', 'aiGrammarFocus'
+            'recentQuizzes', 'grammarStats', 'posStats', 'leeches', 'aiGrammarFocus',
+            'scoreEstimate'
         ));
     }
 

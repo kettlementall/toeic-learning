@@ -393,6 +393,28 @@ boost). Drives all dashboard stats and adaptive grammar selection.
 - **FR-33** Leech list (top 10 by `lapses`).
 - **FR-34** Latest AI-recommended grammar focus from recent reviews
   (de-duplicated, human-labeled).
+- **FR-34a** **Reading score estimate** (`ScoreEstimateService`). A rough TOEIC
+  Reading score (5–495) with a likely range and a confidence level, from the
+  learner's own quiz answers over the last `toeic_estimate.window_days`.
+  **Listening is not estimated** — nothing in the app tests it.
+  - Reads `quiz_questions.is_correct` only, never `review_logs`: `boostGrammar()`
+    (FR-28) writes quality-1 rows for AI-suggested points, which would count as
+    wrong answers that were never given.
+  - Three components: Part 5 accuracy (`part5_grammar`), Part 7 accuracy
+    (`news_reading`), and vocabulary measured on **first exposure** — the first
+    question ever asked about each word that entered through a quiz
+    (`source=quiz_new`). Ordinary vocab-quiz accuracy is not used: the selector
+    mostly asks about words already being studied, so it reports retention of
+    the library, not how much of the TOEIC list was known.
+  - Weighted to the real section (Part 5 30 / Part 6 16 / Part 7 54 items;
+    Part 5 taken as 40% vocabulary, Part 6 as half grammar and half reading),
+    scaled by `ai_ease_factor`, and converted through the `conversion` table.
+    A missing component borrows from the nearest one present.
+  - Range = ±1.96 binomial SE of the composite, never narrower than ±25.
+    Confidence rises with each component meeting `min_questions`; with no Part 7
+    answers it is at most *low*. Under `min_total` answers, or with neither
+    Part 5 nor Part 7 answered, no score is shown — the card names the quiz
+    type that would help most instead.
 
 ### 3.8 Responsive UI
 - **FR-35** Top navigation shows inline links ≥768px and a collapsible
@@ -596,6 +618,16 @@ few years, and nothing downstream absorbs that any more — the queue simply
 grows — so raising it does not buy more learning, it lengthens the tail of
 words waiting their turn (§9).
 
+### 6.2 Score estimate (`config/toeic_estimate.php`)
+
+| Key              | Default | Meaning                                                         |
+|------------------|---------|-----------------------------------------------------------------|
+| `window_days`    | 90      | Only quizzes completed this recently count (FR-34a).           |
+| `ai_ease_factor` | 0.92    | Composite accuracy is scaled by this, assuming AI questions run easier than the exam. Uncalibrated. |
+| `min_questions`  | part5 40, part7 20, vocab 50 | Sample a component needs to raise confidence. |
+| `min_total`      | 30      | Below this many answers in all, no estimate is shown.          |
+| `conversion`     | 0.0→5 … 1.0→495 | Reading accuracy → scaled score, linearly interpolated. |
+
 ---
 
 ## 7. Seed Data
@@ -665,3 +697,7 @@ unique key from `word` to `(user_id, word)`.
 - Only TOEIC Part 5–style grammar and vocabulary are covered, not full-test
   reading/listening sections.
 - The browser TTS fallback quality depends on the device's installed voices.
+- The Reading score estimate (FR-34a) is **uncalibrated**: generated questions
+  carry no measured difficulty (`words.level` is almost uniformly 3), so
+  `ai_ease_factor` and `conversion` are educated defaults. Comparing estimates
+  with real TOEIC results is what would tune them. Listening is not estimated.
