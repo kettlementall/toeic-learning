@@ -467,6 +467,14 @@ PROMPT;
             ? '近期測驗表現：尚無紀錄。'
             : "近期測驗表現參考值：約 {$accuracy}%（僅供你內部評估難度，切勿在任何回覆文字中提及此數字）。";
 
+        // curated-list words the article contains and the learner lacks: the
+        // extraction should spend its slots on these before anything else
+        $coreWords = $profile['core_words'] ?? [];
+        $coreLine = $coreWords
+            ? '本文出現了下列多益核心字（依常考程度排序，學習者尚未學過）：' . implode(', ', $coreWords)
+                . '。挑單字時請優先從這份清單中選，數量不足時才挑文中其他商務／職場常用字。'
+            : '';
+
         $prompt = <<<PROMPT
 你是多益(TOEIC)英語閱讀教練。以下是一篇英文新聞或企業新聞稿，標題為「{$title}」：
 ---
@@ -481,7 +489,7 @@ PROMPT;
    - 第 1 題必須是「否定事實題(NOT／True 題)」，題幹請用 What is NOT mentioned about...、Which of the following is NOT...、What is true about... 這類問法。
    - 否定事實題的 3 個誘答選項都必須是文章中「明確寫到」的內容(每個都能指回原文的某一句)；正確答案則是文章完全沒提到、或與文章牴觸的那一項。不可用模稜兩可或需要主觀判斷的敘述當選項，因為這類題目考的是逐項回原文比對。
    - 其餘 3 題測驗主旨、細節、推論或字義，盡量分散不同類型。
-3. 從文章挑出 5-8 個適合該學習者學習的多益實用單字(實詞為主，優先挑商務／職場場景會用到的字，避免過於簡單、專有名詞或公司名)，附詞性、繁中翻譯、一句取自或貼近文章情境的英文例句，以及一句繁體中文記憶小技巧。
+3. 從文章挑出 5-8 個適合該學習者學習的多益實用單字(實詞為主，優先挑商務／職場場景會用到的字，避免過於簡單、專有名詞或公司名，也避免多益少考的法律、醫療、政治、軍事等專業領域用字)。{$coreLine}附詞性、繁中翻譯、一句取自或貼近文章情境的英文例句，以及一句繁體中文記憶小技巧。
 
 JSON 格式如下：
 {
@@ -541,7 +549,7 @@ PROMPT;
         $isGrammar = $quiz->type === 'part5_grammar';
         $wordsLine = $isGrammar
             ? '"review_words": [],  // 文法測驗請務必回傳空陣列，不要建議任何單字'
-            : '"review_words": ["建議優先複習的單字(只列答錯或相關的英文實詞，不要列介系詞/連接詞/代名詞等功能字)"],';
+            : '"review_words": ["建議優先複習的單字(只列答錯或相關的英文實詞，不要列介系詞/連接詞/代名詞等功能字，也不要列多益少考的法律、醫療、政治、軍事等專業領域用字)"],';
 
         $prompt = <<<PROMPT
 你是多益(TOEIC)學習教練。以下是學生一份「{$quiz->type}」測驗的作答結果（得分 {$quiz->score}/{$quiz->total}）：

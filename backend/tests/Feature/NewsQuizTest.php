@@ -159,6 +159,28 @@ XML;
         $this->assertNotEmpty($quiz->article['passage']);
     }
 
+    /** The prompt names the core words the passage contains and the learner lacks, by rank. */
+    public function test_news_prompt_points_at_unlearned_core_words_in_the_passage(): void
+    {
+        $this->fakeHttp();
+        $user = User::factory()->create();
+
+        foreach (['announce', 'consumer', 'demand', 'verdict'] as $rank => $word) {
+            Word::create(['word' => $word, 'source' => Word::SOURCE_TOEIC_CORE, 'frequency_rank' => $rank + 1]);
+        }
+        // owned already, so not worth a slot
+        UserWord::create(['user_id' => $user->id, 'word' => 'consumer', 'source' => 'search', 'next_review_at' => today()]);
+
+        $this->actingAs($user)
+            ->post('/quiz', ['type' => 'news_reading', 'topic' => 'business'])
+            ->assertRedirect();
+
+        // "announced" in the passage counts for "announce"; "verdict" is not in it
+        Http::assertSent(fn ($request) => str_contains($request->url(), 'api.anthropic.com')
+            && str_contains($request->body(), 'announce, demand')
+            && ! str_contains($request->body(), 'verdict'));
+    }
+
     public function test_news_quiz_requires_api_key(): void
     {
         config(['services.anthropic.api_key' => null]);

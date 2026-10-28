@@ -322,7 +322,11 @@ boost). Drives all dashboard stats and adaptive grammar selection.
   *this* learner (profile = library size + recent quiz accuracy), a Chinese
   `suitability_note` and `summary`, ~4 reading-comprehension questions, and
   5–8 extracted vocab words. Comprehension questions store neither `word` nor
-  `grammar_point`.
+  `grammar_point`. The profile also carries up to 25 `toeic_core` words that
+  occur in the passage (any inflection) and the learner does not own yet, in
+  rank order (`QuizController::unlearnedCoreWordsIn`); the prompt has the
+  extraction draw from those first and avoid legal/medical/political/military
+  vocabulary.
 - **FR-22c-i** The question set follows TOEIC Part 7: **the first question is a
   negative-factual (NOT/True) question**, whose three distractors must each be
   explicitly stated in the passage and whose answer must be absent from or
@@ -372,6 +376,12 @@ boost). Drives all dashboard stats and adaptive grammar selection.
   today, not penalised: no lapse, no ease change, no failure log, and its
   interval re-anchored to the real gap. Grammar quizzes are instructed to return
   empty `review_words`.
+  Since tested words are excluded, every suggestion the learner does not
+  already own is new intake, so those are taken **only from the curated
+  `toeic_core` list** (lemma-matched). Without that the review drifts into
+  whatever its sentences were about — courtrooms, vaccines — and each such card
+  competes with the core list for review time. The prompt also steers away from
+  legal/medical/political/military vocabulary.
 - **FR-28** AI-suggested weak grammar points are normalized (code or Chinese
   label) and recorded as `review_log` rows with `quality=1`
   (`boostGrammar`), nudging the adaptive selector. These decay naturally as the

@@ -11,6 +11,7 @@ use App\Services\DictionaryService;
 use App\Services\NewsService;
 use App\Services\QuizBuilderService;
 use App\Services\SpacedRepetitionService;
+use App\Support\Lemma;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 
@@ -144,7 +145,7 @@ class QuizController extends Controller
         $generated = $this->claude->generateNewsQuiz(
             $article['title'],
             $article['passage'],
-            $this->learnerProfile(),
+            $this->learnerProfile() + ['core_words' => $this->unlearnedCoreWordsIn($article['passage'])],
         );
 
         $questions = $generated['questions'] ?? [];
@@ -282,7 +283,17 @@ class QuizController extends Controller
                     ->filter(fn ($w) => is_string($w) && trim($w) !== '')
                     ->map(fn ($w) => strtolower(trim($w)))
                     ->reject(fn ($w) => in_array($w, $alreadyTested, true)) // graded at submit
-                    ->unique()
+                    ->unique();
+
+                // Everything left is untested, so a word not already owned is
+                // pure intake. Take that only from the curated list: the review
+                // otherwise drifts into whatever the questions' sentences were
+                // about (courtrooms, vaccines), and every such card competes with
+                // the core list for review time.
+                $owned = UserWord::forUser()->pluck('word')->flip();
+                $core = Lemma::index(Word::toeicCore()->pluck('word'));
+                $suggested = $suggested
+                    ->filter(fn ($w) => isset($owned[$w]) || Lemma::isKnown($w, $core))
                     ->all();
 
                 // one round trip for the lot: with the dictionary API down
@@ -391,6 +402,27 @@ class QuizController extends Controller
         }
 
         return ['vocab_count' => $vocabCount, 'accuracy' => $accuracy];
+    }
+
+    /**
+     * Curated-list words that occur in a passage (in any inflection) and the
+     * learner does not own yet, most frequently tested first — what the news
+     * quiz should extract before reaching for anything else the article has.
+     *
+     * @return string[]
+     */
+    private function unlearnedCoreWordsIn(string $passage, int $limit = 25): array
+    {
+        preg_match_all("/[a-z]+(?:-[a-z]+)?/", strtolower($passage), $m);
+        $inPassage = Lemma::index(array_unique($m[0]));
+        $owned = Lemma::index(UserWord::forUser()->pluck('word'));
+
+        return Word::toeicCore()
+            ->pluck('word')
+            ->filter(fn ($w) => Lemma::isKnown($w, $inPassage) && ! Lemma::isKnown($w, $owned))
+            ->take($limit)
+            ->values()
+            ->all();
     }
 
     /**
