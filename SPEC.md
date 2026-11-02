@@ -231,6 +231,13 @@ boost). Drives all dashboard stats and adaptive grammar selection.
   cards. Nothing anywhere runs on a timer — no cron, no queue worker, no
   nightly job — because nothing needs to: the queue is a query, so it is always
   current the moment it is read.
+  Each card is a **recall ladder**: the word alone first; if it does not come
+  back, *Show in a Sentence* reveals the example with the word (and its
+  inflections) highlighted, generating one on the fly if the card has none.
+  A card answered only with the sentence can be graded *Forgot* (1) or *Got it
+  from the sentence* (3, Hard) — never Good/Easy, since the word alone did not
+  come back. That separates bare recall, recall in context, and the
+  recognition a four-option quiz tests.
 - **FR-12** `POST /review/{userWord}/grade` with `quality` 0-5 applies SM-2 (see
   §4.1) and returns `{ok, next_review_at, interval_days, suspended}` as JSON.
 - **FR-13** Every grade writes a `review_log` (denormalizing the word's category

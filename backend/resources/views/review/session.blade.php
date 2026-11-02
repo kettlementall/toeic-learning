@@ -35,8 +35,16 @@
                 </div>
                 <span class="text-slate-400 mt-1" x-text="current.phonetic"></span>
 
+                <!-- second chance: the word in a sentence, before the answer -->
+                <template x-if="contextShown">
+                    <p class="mt-4 text-slate-600" x-html="current.example ? highlight(current.example, current.word) : (loadingExample ? 'Generating an example…' : 'No example available.')"></p>
+                </template>
+
                 <template x-if="!revealed">
-                    <button @click="reveal()" class="mt-6 px-5 py-2 bg-slate-100 rounded-lg text-sm hover:bg-slate-200">Show Answer</button>
+                    <div class="mt-6 flex flex-wrap justify-center gap-2">
+                        <button x-show="!contextShown" @click="showContext()" class="px-5 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50">Show in a Sentence</button>
+                        <button @click="reveal()" class="px-5 py-2 bg-slate-100 rounded-lg text-sm hover:bg-slate-200">Show Answer</button>
+                    </div>
                 </template>
 
                 <template x-if="revealed">
@@ -59,7 +67,7 @@
                                 <p class="text-lg text-slate-700 mt-2" x-text="current.zh"></p>
                             </div>
                         </template>
-                        <p class="italic text-slate-400 mt-2" x-text="current.example || (loadingExample ? 'Generating an example…' : '')"></p>
+                        <p x-show="!contextShown" class="italic text-slate-400 mt-2" x-text="current.example || (loadingExample ? 'Generating an example…' : '')"></p>
                         <p class="text-sm text-amber-700 mt-2" x-show="current.mnemonic || loadingMnemonic"
                            x-text="current.mnemonic ? ('💡 ' + current.mnemonic) : (loadingMnemonic ? '💡 產生記憶小技巧中…' : '')"></p>
                     </div>
@@ -67,12 +75,19 @@
                 <audio x-ref="audio" :src="current.audio"></audio>
             </div>
 
-            <template x-if="revealed">
+            <template x-if="revealed && !contextShown">
                 <div class="grid grid-cols-4 gap-2 mt-5">
                     <button @click="grade(1)" class="py-2 rounded-lg bg-red-100 text-red-700 text-sm font-medium hover:bg-red-200">Forgot</button>
                     <button @click="grade(3)" class="py-2 rounded-lg bg-amber-100 text-amber-700 text-sm font-medium hover:bg-amber-200">Hard</button>
                     <button @click="grade(4)" class="py-2 rounded-lg bg-sky-100 text-sky-700 text-sm font-medium hover:bg-sky-200">Good</button>
                     <button @click="grade(5)" class="py-2 rounded-lg bg-emerald-100 text-emerald-700 text-sm font-medium hover:bg-emerald-200">Easy</button>
+                </div>
+            </template>
+            <!-- needing the sentence means the word alone did not come back: at best Hard -->
+            <template x-if="revealed && contextShown">
+                <div class="grid grid-cols-2 gap-2 mt-5">
+                    <button @click="grade(1)" class="py-2 rounded-lg bg-red-100 text-red-700 text-sm font-medium hover:bg-red-200">Forgot, even with the sentence</button>
+                    <button @click="grade(3)" class="py-2 rounded-lg bg-amber-100 text-amber-700 text-sm font-medium hover:bg-amber-200">Got it from the sentence</button>
                 </div>
             </template>
         </div>
@@ -97,25 +112,40 @@
 <script>
 function reviewSession(cards) {
     return {
-        cards, index: 0, revealed: false, loadingExample: false, loadingMnemonic: false,
+        cards, index: 0, revealed: false, contextShown: false, loadingExample: false, loadingMnemonic: false,
         get current() { return this.cards[this.index] || {}; },
         get done() { return this.cards.length === 0 || this.index >= this.cards.length; },
+        // generate an example on the fly if the card has none
+        async ensureExample(c) {
+            if (c.example || c._exampleTried) return;
+            c._exampleTried = true;
+            this.loadingExample = true;
+            try {
+                const r = await fetch('{{ route('words.example') }}?q=' + encodeURIComponent(c.word));
+                const data = await r.json();
+                if (data.example) c.example = data.example;
+            } catch (e) {}
+            this.loadingExample = false;
+        },
+        // the word alone did not come back: try it inside a sentence first
+        async showContext() {
+            this.contextShown = true;
+            const c = this.cards[this.index];
+            if (c) await this.ensureExample(c);
+        },
+        // mark the word (and its inflections) in an HTML-escaped sentence
+        highlight(sentence, word) {
+            const esc = s => s.replace(/[&<>"']/g, ch => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[ch]));
+            const stem = word.length > 3 && word.endsWith('e') ? word.slice(0, -1) : word;
+            const re = new RegExp('\\b(' + esc(stem).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[a-z]*)', 'gi');
+            return esc(sentence).replace(re, '<mark class="bg-amber-100 text-slate-900 font-semibold px-0.5 rounded">$1</mark>');
+        },
         // reveal the answer; if the card has no example, generate one on the fly
         async reveal() {
             this.revealed = true;
             const c = this.cards[this.index];
             if (!c) return;
-            // generate an example on the fly if the card has none
-            if (!c.example && !c._exampleTried) {
-                c._exampleTried = true;
-                this.loadingExample = true;
-                try {
-                    const r = await fetch('{{ route('words.example') }}?q=' + encodeURIComponent(c.word));
-                    const data = await r.json();
-                    if (data.example) c.example = data.example;
-                } catch (e) {}
-                this.loadingExample = false;
-            }
+            await this.ensureExample(c);
             // generate a mnemonic on the fly if the card has none
             if (!c.mnemonic && !c._mnemonicTried) {
                 c._mnemonicTried = true;
@@ -147,6 +177,7 @@ function reviewSession(cards) {
                 });
             } catch (e) {}
             this.revealed = false;
+            this.contextShown = false;
             this.index++;
         }
     }
