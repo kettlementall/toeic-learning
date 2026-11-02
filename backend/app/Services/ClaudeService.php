@@ -424,6 +424,58 @@ PROMPT;
     }
 
     /**
+     * A deeper study note for a word the learner keeps failing: drilling the
+     * same card has stopped working, so give it something new to hang on —
+     * TOEIC collocations, the words it gets confused with, and its parts.
+     *
+     * @return array{collocations: string[], confusables: array<array{word: string, note: string}>, parts: string}|null
+     */
+    public function generateStudyNote(string $word, ?string $definitionZh = null): ?array
+    {
+        if (! $this->hasKey() || trim($word) === '') {
+            return null;
+        }
+
+        $label = $definitionZh ? "{$word}（{$definitionZh}）" : $word;
+
+        $prompt = <<<PROMPT
+學習者反覆記不住英文單字「{$label}」。請提供幫助他換個角度記住這個字的資料，以多益(TOEIC)商務／職場情境為主，只回傳 JSON，不要其他文字：
+{
+  "collocations": ["2-3 個多益常見的搭配詞組，英文後附簡短繁體中文，例如 sign a lease（簽租約）"],
+  "confusables": [{"word": "容易和它搞混的英文字(拼字相近或意思相近)", "note": "繁體中文說明兩者差異，25字內"}],
+  "parts": "字根字首拆解並說明如何導出字義(繁體中文，40字內)；不適合拆解就回傳空字串"
+}
+confusables 給 0-2 個，沒有真正容易搞混的字就回傳空陣列，不要硬湊。
+PROMPT;
+
+        // Same malformed-JSON retry strategy as generateExamples().
+        for ($attempt = 0; $attempt < 3; $attempt++) {
+            $json = $this->callJson($prompt, 1024);
+            if (! is_array($json)) {
+                continue;
+            }
+
+            $note = [
+                'collocations' => array_values(array_filter(
+                    (array) ($json['collocations'] ?? []),
+                    fn ($c) => is_string($c) && trim($c) !== ''
+                )),
+                'confusables' => array_values(array_filter(
+                    (array) ($json['confusables'] ?? []),
+                    fn ($c) => is_array($c) && ! empty($c['word']) && ! empty($c['note'])
+                )),
+                'parts' => is_string($json['parts'] ?? null) ? trim($json['parts']) : '',
+            ];
+
+            if ($note['collocations'] || $note['confusables'] || $note['parts'] !== '') {
+                return $note;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Generate quiz questions.
      *
      * @param  array  $items  For vocab: list of words (strings). For part5: list of grammar_point strings.

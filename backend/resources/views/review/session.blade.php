@@ -13,6 +13,9 @@
         'meanings' => $uw->dictionary?->meanings ?? [],
         'example' => $uw->dictionary?->example,
         'mnemonic' => $uw->dictionary?->mnemonic,
+        'leech' => $uw->is_leech,
+        'lapses' => (int) $uw->lapses,
+        'study_note' => $uw->dictionary?->study_note,
         'grade_url' => route('review.grade', $uw),
     ])->values();
 @endphp
@@ -34,6 +37,8 @@
                     <button @click="play()" class="text-indigo-600 text-2xl">🔊</button>
                 </div>
                 <span class="text-slate-400 mt-1" x-text="current.phonetic"></span>
+                <span x-show="current.leech" class="mt-2 text-xs bg-red-50 text-red-700 border border-red-200 rounded-full px-2 py-0.5"
+                      x-text="'missed ' + current.lapses + '× — try a different angle this time'"></span>
 
                 <!-- second chance: the word in a sentence, before the answer -->
                 <template x-if="contextShown">
@@ -70,6 +75,37 @@
                         <p x-show="!contextShown" class="italic text-slate-400 mt-2" x-text="current.example || (loadingExample ? 'Generating an example…' : '')"></p>
                         <p class="text-sm text-amber-700 mt-2" x-show="current.mnemonic || loadingMnemonic"
                            x-text="current.mnemonic ? ('💡 ' + current.mnemonic) : (loadingMnemonic ? '💡 產生記憶小技巧中…' : '')"></p>
+
+                        <!-- a word that keeps failing gets more to hang on to -->
+                        <template x-if="current.leech">
+                            <div class="mt-4 text-left bg-slate-50 border rounded-xl p-4 flex flex-col gap-3">
+                                <template x-if="!current.study_note">
+                                    <p class="text-slate-400" x-text="loadingNote ? 'Preparing a study note…' : 'No study note available.'"></p>
+                                </template>
+                                <template x-if="current.study_note && current.study_note.collocations && current.study_note.collocations.length">
+                                    <div>
+                                        <div class="text-xs font-semibold text-slate-500 mb-1">Common in TOEIC</div>
+                                        <template x-for="(c, i) in current.study_note.collocations" :key="i">
+                                            <div class="text-slate-700" x-html="highlight(c, current.word)"></div>
+                                        </template>
+                                    </div>
+                                </template>
+                                <template x-if="current.study_note && current.study_note.confusables && current.study_note.confusables.length">
+                                    <div>
+                                        <div class="text-xs font-semibold text-slate-500 mb-1">Don't mix it up with</div>
+                                        <template x-for="(c, i) in current.study_note.confusables" :key="i">
+                                            <div class="text-slate-700"><span class="font-medium" x-text="c.word"></span> — <span x-text="c.note"></span></div>
+                                        </template>
+                                    </div>
+                                </template>
+                                <template x-if="current.study_note && current.study_note.parts">
+                                    <div>
+                                        <div class="text-xs font-semibold text-slate-500 mb-1">Word parts</div>
+                                        <div class="text-slate-700" x-text="current.study_note.parts"></div>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
                     </div>
                 </template>
                 <audio x-ref="audio" :src="current.audio"></audio>
@@ -112,9 +148,27 @@
 <script>
 function reviewSession(cards) {
     return {
-        cards, index: 0, revealed: false, contextShown: false, loadingExample: false, loadingMnemonic: false,
+        cards, index: 0, revealed: false, contextShown: false, loadingExample: false, loadingMnemonic: false, loadingNote: false,
         get current() { return this.cards[this.index] || {}; },
         get done() { return this.cards.length === 0 || this.index >= this.cards.length; },
+        init() {
+            this.prefetchNote();
+            this.$watch('index', () => this.prefetchNote());
+        },
+        // start a leech's study note as soon as the card shows, so it is
+        // ready by the time the answer is revealed
+        async prefetchNote() {
+            const c = this.cards[this.index];
+            if (!c || !c.leech || c.study_note || c._noteTried) return;
+            c._noteTried = true;
+            this.loadingNote = true;
+            try {
+                const r = await fetch('{{ route('words.study-note') }}?q=' + encodeURIComponent(c.word));
+                const data = await r.json();
+                if (data.study_note) c.study_note = data.study_note;
+            } catch (e) {}
+            this.loadingNote = false;
+        },
         // generate an example on the fly if the card has none
         async ensureExample(c) {
             if (c.example || c._exampleTried) return;

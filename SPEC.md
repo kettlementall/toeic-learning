@@ -203,6 +203,15 @@ boost). Drives all dashboard stats and adaptive grammar selection.
     reveal; the Word Search and vocabulary-list cards expose a "產生記憶小技巧"
     button.
 
+- **FR-6c** **Study notes for leeches.** Drilling the same card has stopped
+  working for a word the learner keeps failing, so it gets something new to
+  hang on to: `words.study_note` = `{collocations[], confusables[{word, note}],
+  parts}` — 2–3 TOEIC collocations, 0–2 genuinely confusable words with the
+  difference in Chinese, and a word-part breakdown. Generated once per word by
+  `ClaudeService::generateStudyNote()` (retries up to 3×, drops empty or
+  note-less entries) and shared. `GET /words/study-note?q=<term>`
+  (`WordController::studyNote`) returns/generates it.
+
 ### 3.2 Vocabulary library (`VocabularyController`)
 - **FR-7** `GET /vocabulary` lists `user_words` (newest first), paginated 30,
   with the related dictionary entry eager-loaded.
@@ -238,6 +247,9 @@ boost). Drives all dashboard stats and adaptive grammar selection.
   from the sentence* (3, Hard) — never Good/Easy, since the word alone did not
   come back. That separates bare recall, recall in context, and the
   recognition a four-option quiz tests.
+  A **leech** card (FR-15) is badged with its miss count and, on reveal, shows
+  a study note (FR-6c) — fetched as soon as the card comes up so it is ready
+  by the reveal.
 - **FR-12** `POST /review/{userWord}/grade` with `quality` 0-5 applies SM-2 (see
   §4.1) and returns `{ok, next_review_at, interval_days, suspended}` as JSON.
 - **FR-13** Every grade writes a `review_log` (denormalizing the word's category

@@ -77,6 +77,30 @@ class WordController extends Controller
     }
 
     /**
+     * On-the-fly study note (collocations, confusables, word parts) for a word
+     * the learner keeps failing. Generated once and persisted to the words
+     * cache; requested by the review card when a leech comes up.
+     */
+    public function studyNote(Request $request)
+    {
+        $term = trim(strtolower((string) $request->query('q', '')));
+        if ($term === '') {
+            return response()->json(['error' => 'Missing word'], 422);
+        }
+
+        $word = Word::where('word', $term)->first() ?? $this->dictionary->lookup($term);
+
+        if ($word && ! $word->study_note && $this->claude->hasKey()) {
+            $note = $this->claude->generateStudyNote($word->word, $word->definition_zh);
+            if ($note) {
+                $word->update(['study_note' => $note]);
+            }
+        }
+
+        return response()->json(['study_note' => $word?->study_note]);
+    }
+
+    /**
      * AJAX dictionary lookup. Auto-adds the word to the user's library.
      */
     public function lookup(Request $request)
