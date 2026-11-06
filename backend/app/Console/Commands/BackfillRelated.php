@@ -11,8 +11,9 @@ use Illuminate\Console\Command;
 class BackfillRelated extends Command
 {
     protected $signature = 'words:backfill-related
-                            {--limit=1000 : Max words to generate related words for}
-                            {--user-id= : Only consider one user\'s library (default: all users)}';
+                            {--limit=2000 : Max words to generate related words for}
+                            {--user-id= : Only consider one user\'s library (default: all users)}
+                            {--catalog : Every cached word, not only library words}';
 
     protected $description = 'Generate AI near-synonyms for library words that have never been asked';
 
@@ -39,12 +40,10 @@ class BackfillRelated extends Command
         $userId = $this->option('user-id') ? (int) $this->option('user-id') : null;
         $limit = max(1, (int) $this->option('limit'));
 
-        $libraryWordIds = UserWord::whereNotNull('word_id')
-            ->when($userId, fn ($q) => $q->where('user_id', $userId))
-            ->pluck('word_id')->unique();
-
-        $missing = Word::whereIn('id', $libraryWordIds)
-            ->whereNull('related')
+        $missing = Word::whereNull('related')
+            ->unless($this->option('catalog'), fn ($q) => $q->whereIn('id', UserWord::whereNotNull('word_id')
+                ->when($userId, fn ($u) => $u->where('user_id', $userId))
+                ->select('word_id')))
             ->limit($limit)
             ->get();
 

@@ -171,8 +171,9 @@ function reviewSession(cards) {
             this.$watch('index', () => this.prefetchNote());
             this.fetchRelated();
         },
-        // one request for the whole sitting: known near-synonyms per card,
-        // generating any the server has never asked for
+        // one request for the whole sitting: known near-synonyms per card, and
+        // meanings repaired for their TOEIC sense where a card still had the
+        // dictionary's first definition
         async fetchRelated() {
             if (!this.cards.length) return;
             const params = new URLSearchParams();
@@ -180,7 +181,16 @@ function reviewSession(cards) {
             try {
                 const r = await fetch('{{ route('words.related') }}?' + params);
                 const data = await r.json();
-                this.cards.forEach(c => { c.related = data.related?.[c.word] || []; });
+                this.cards.forEach(c => {
+                    c.related = data.related?.[c.word] || [];
+                    const fixed = data.meanings?.[c.word];
+                    if (fixed) {
+                        c.meanings = fixed.meanings;
+                        c.zh = fixed.zh;
+                        c.pos = fixed.pos;
+                        c.example = fixed.example || c.example;
+                    }
+                });
             } catch (e) {}
         },
         // start a leech's study note as soon as the card shows, so it is

@@ -6,6 +6,7 @@ use App\Models\UserWord;
 use App\Models\Word;
 use App\Services\ClaudeService;
 use App\Services\DictionaryService;
+use App\Services\MeaningRepairService;
 use App\Services\RelatedWordsService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -102,11 +103,18 @@ class WordController extends Controller
     }
 
     /**
-     * Near-synonyms the learner already knows, for a sitting's worth of cards
-     * at once (`q[]=...`). Words never asked are generated in one AI call
-     * first. Returns `{related: {word: [{word, note, zh}]}}`.
+     * Everything a sitting's cards (`q[]=...`) may still be missing, in one
+     * request after the page loads, so no way of adding a word has to remember
+     * to prepare it:
+     *  - meanings not yet chosen for their TOEIC sense are repaired, and sent
+     *    back so the open cards show the repaired ones;
+     *  - near-synonym lists are generated for the cards, and for known words
+     *    that never came up as a card;
+     *  - then the near-synonyms the learner already knows.
+     *
+     * Returns `{related: {word: [{word, note, zh}]}, meanings: {word: {...}}}`.
      */
-    public function related(Request $request, RelatedWordsService $related)
+    public function related(Request $request, RelatedWordsService $related, MeaningRepairService $repair)
     {
         $data = $request->validate([
             'q' => 'required|array|max:' . RelatedWordsService::CHUNK,
@@ -120,11 +128,23 @@ class WordController extends Controller
             ->values()
             ->all();
 
+        $repaired = collect();
         if ($this->claude->hasKey()) {
-            $related->ensure(Word::whereIn('word', $terms)->get());
+            $words = Word::whereIn('word', $terms)->get();
+            $repaired = $repair->repair($words);
+            $related->ensure($words);
+            $related->ensureKnown(auth()->id());
         }
 
-        return response()->json(['related' => $related->forUser(auth()->id(), $terms)]);
+        return response()->json([
+            'related' => $related->forUser(auth()->id(), $terms),
+            'meanings' => $repaired->mapWithKeys(fn ($w) => [strtolower($w->word) => [
+                'meanings' => $w->meanings,
+                'zh' => $w->definition_zh,
+                'pos' => $w->part_of_speech,
+                'example' => $w->example,
+            ]]),
+        ]);
     }
 
     /**

@@ -191,7 +191,12 @@ boost). Drives all dashboard stats and adaptive grammar selection.
   `senses_checked_at`, `ClaudeService::toeicMeanings()` rewrites the meanings
   in batches of 10, with the stored ones passed only as a hint (they may be
   the dialectal homograph and nothing else). Words the model skips stay
-  unchecked, so a rerun picks them up.
+  unchecked, so a rerun picks them up. `--catalog` covers every cached word,
+  not only library words — chiefly the curated list, which carries a single
+  Chinese gloss and no per-part-of-speech meanings until repaired. The logic
+  lives in `MeaningRepairService`, which the flashcard request (FR-6d) also
+  uses, so a word that enters the library unchecked by any path is repaired
+  the first time it comes up as a card.
 - **FR-5** A successful lookup **auto-adds** the word to `user_words` with
   `source=search` and `next_review_at=today` (idempotent via `firstOrNew`).
 - **FR-6** Errors: empty term ⇒ 422; not found ⇒ 404; both as JSON messages.
@@ -250,11 +255,16 @@ boost). Drives all dashboard stats and adaptive grammar selection.
     own list, or a known word whose list names the term — since the model is
     not symmetric. A word therefore joins other cards the moment it is first
     answered correctly, with nothing regenerated.
-  - `GET /words/related?q[]=…` (`WordController::related`, ≤20 terms) generates
-    any missing lists in one call, then returns `{related: {word: [{word, note,
-    zh}]}}`. Cards only fill words that come up for review, so
-    `php artisan words:backfill-related` (`--limit`, `--user-id`) fills every
-    library word whatever way it entered.
+  - `GET /words/related?q[]=…` (`WordController::related`, ≤20 terms) is the
+    one request a flashcard sitting makes after loading, and it heals whatever
+    the cards are still missing, so no way of adding a word has to remember to
+    prepare it: it repairs unchecked meanings (FR-4a) and returns them for the
+    open cards, generates missing lists for the cards **and** for up to 20
+    known words that have none (`RelatedWordsService::ensureKnown` — words
+    learned only through quizzes never come up as cards), then returns
+    `{related: {word: [{word, note, zh}]}, meanings: {word: {meanings, zh, pos,
+    example}}}`. `php artisan words:backfill-related` (`--limit`, `--user-id`,
+    `--catalog`) does the same in bulk.
 
 ### 3.2 Vocabulary library (`VocabularyController`)
 - **FR-7** `GET /vocabulary` lists `user_words` (newest first), paginated 30,

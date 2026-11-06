@@ -55,6 +55,27 @@ class RelatedWordsService
     }
 
     /**
+     * Give lists to known words that have none — words learned only through
+     * quizzes never came up as a card to get one. Without its list, a known
+     * word is found only when the card's own list happens to name it.
+     *
+     * @return int  how many words were filled
+     */
+    public function ensureKnown(int $userId, int $limit = self::CHUNK): int
+    {
+        $words = Word::whereNull('related')
+            ->whereIn('id', UserWord::forUser($userId)
+                ->active()
+                ->where('repetitions', '>=', 1)
+                ->whereNotNull('word_id')
+                ->select('word_id'))
+            ->limit($limit)
+            ->get();
+
+        return $this->ensure($words);
+    }
+
+    /**
      * For each term, the related words this learner knows: in the term's own
      * list, or listing the term in theirs — the model is not symmetric, and
      * either direction is the same pair. "Known" means answered correctly at
