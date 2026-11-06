@@ -94,7 +94,6 @@
                     <div><dt class="font-semibold text-slate-500">Synonyms</dt><dd class="mt-0.5 text-slate-600" x-text="result.synonyms"></dd></div>
                 </template>
             </dl>
-            <audio x-ref="audio" :src="result.audio_url"></audio>
         </div>
     </template>
 </div>
@@ -128,11 +127,7 @@ function wordSearch() {
         },
         playAudio() {
             // real recording if the dictionary had one, else browser text-to-speech
-            if (this.result?.audio_url && this.$refs.audio) {
-                this.$refs.audio.play();
-            } else {
-                speak(this.result?.word);
-            }
+            playWord(this.result?.audio_url, this.result?.word);
         },
         clear() {
             this.term = ''; this.error = ''; this.result = null; this.added = false;

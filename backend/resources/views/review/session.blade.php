@@ -108,7 +108,6 @@
                         </template>
                     </div>
                 </template>
-                <audio x-ref="audio" :src="current.audio"></audio>
             </div>
 
             <template x-if="revealed && !contextShown">
@@ -213,11 +212,7 @@ function reviewSession(cards) {
             }
         },
         play() {
-            if (this.current.audio && this.$refs.audio) {
-                this.$refs.audio.play();
-            } else {
-                speak(this.current.word);
-            }
+            playWord(this.current.audio, this.current.word);
         },
         async grade(q) {
             try {

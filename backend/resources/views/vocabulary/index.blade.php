@@ -41,11 +41,7 @@
                             @if ($uw->dictionary?->phonetic)
                                 <span class="text-sm text-slate-400">{{ $uw->dictionary->phonetic }}</span>
                             @endif
-                            @if ($uw->dictionary?->audio_url)
-                                <button onclick="new Audio('{{ $uw->dictionary->audio_url }}').play()" class="text-indigo-600">🔊</button>
-                            @else
-                                <button onclick="speak(@js($uw->word))" class="text-indigo-600" title="Browser pronunciation">🔊</button>
-                            @endif
+                            <button onclick="playWord(@js($uw->dictionary?->audio_url), @js($uw->word))" class="text-indigo-600">🔊</button>
                             <span class="text-xs bg-slate-100 text-slate-500 px-2 py-0.5 rounded">{{ $sourceLabels[$uw->source] ?? $uw->source }}</span>
                             @if ($uw->is_leech)
                                 <span class="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full" title="Missed again and again">🔴 missed {{ $uw->lapses }}×</span>

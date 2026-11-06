@@ -119,6 +119,14 @@
             u.rate = 0.9;
             window.speechSynthesis.speak(u);
         }
+
+        // Play a word's recorded pronunciation, falling back to speak() when
+        // there is none or it fails to load — the dictionary's audio host does
+        // go down, and a dead button is worse than a synthetic voice.
+        function playWord(url, word) {
+            if (!url) return speak(word);
+            new Audio(url).play().catch(() => speak(word));
+        }
     </script>
 </body>
 </html>
