@@ -476,6 +476,70 @@ PROMPT;
     }
 
     /**
+     * Near-synonyms in each word's TOEIC sense, each with how it differs.
+     * Deliberately told nothing about the learner's library: asked to pick from
+     * known words, the model forces matches, and a list about the word alone
+     * can be shared across learners.
+     *
+     * @param  array  $items  [{word, definition_zh}]
+     * @return array<string, array<array{word: string, note: string}>>  keyed by
+     *         lowercased word; an empty list means the model found none
+     */
+    public function generateRelated(array $items): array
+    {
+        $items = array_values(array_filter($items, fn ($i) => ! empty($i['word'])));
+
+        if (! $this->hasKey() || empty($items)) {
+            return [];
+        }
+
+        // The stored Chinese is only the dictionary's first sense per part of
+        // speech, often not the one TOEIC tests (industry → 勤勉, overlook →
+        // 觀景台), so it must not pick the sense here. Words alone; the model
+        // anchors on the TOEIC sense itself.
+        $list = implode("\n", array_map(fn ($i) => trim((string) $i['word']), $items));
+
+        $prompt = <<<PROMPT
+請為以下每個英文單字，列出在多益(TOEIC)商務／職場情境下「同一個意思」的英文近義詞或常見換句話說，每個字 3-6 個（用原形），並用繁體中文說明它和本字的用法差異（25字內）。
+以該字在多益最常考的意思為準；若在多益有兩個常考的意思，兩個意思的近義詞都可列，並在說明開頭用【】註明是哪個意思。
+只列意思真正相同的字；找不到就給空陣列，不要硬湊：
+{$list}
+
+只回傳 JSON 物件，鍵為本字，不要其他文字：
+{"postpone": [{"word": "delay", "note": "delay 常指非預期的延誤；postpone 是主動延期"}]}
+PROMPT;
+
+        // Same malformed-JSON retry strategy as generateExamples().
+        for ($attempt = 0; $attempt < 3; $attempt++) {
+            $json = $this->callJson($prompt, 4096);
+            if (! is_array($json)) {
+                continue;
+            }
+
+            $out = [];
+            foreach ($json as $word => $related) {
+                if (! is_string($word) || ! is_array($related)) {
+                    continue;
+                }
+                $word = strtolower(trim($word));
+                $out[$word] = collect($related)
+                    ->filter(fn ($r) => is_array($r) && is_string($r['word'] ?? null) && is_string($r['note'] ?? null))
+                    ->map(fn ($r) => ['word' => strtolower(trim($r['word'])), 'note' => trim($r['note'])])
+                    ->reject(fn ($r) => $r['word'] === '' || $r['word'] === $word)
+                    ->unique('word')
+                    ->values()
+                    ->all();
+            }
+
+            if (! empty($out)) {
+                return $out;
+            }
+        }
+
+        return [];
+    }
+
+    /**
      * Generate quiz questions.
      *
      * @param  array  $items  For vocab: list of words (strings). For part5: list of grammar_point strings.

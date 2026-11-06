@@ -6,6 +6,7 @@ use App\Models\UserWord;
 use App\Models\Word;
 use App\Services\ClaudeService;
 use App\Services\DictionaryService;
+use App\Services\RelatedWordsService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 
@@ -98,6 +99,32 @@ class WordController extends Controller
         }
 
         return response()->json(['study_note' => $word?->study_note]);
+    }
+
+    /**
+     * Near-synonyms the learner already knows, for a sitting's worth of cards
+     * at once (`q[]=...`). Words never asked are generated in one AI call
+     * first. Returns `{related: {word: [{word, note, zh}]}}`.
+     */
+    public function related(Request $request, RelatedWordsService $related)
+    {
+        $data = $request->validate([
+            'q' => 'required|array|max:' . RelatedWordsService::CHUNK,
+            'q.*' => 'string|max:100',
+        ]);
+
+        $terms = collect($data['q'])
+            ->map(fn ($t) => trim(strtolower($t)))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        if ($this->claude->hasKey()) {
+            $related->ensure(Word::whereIn('word', $terms)->get());
+        }
+
+        return response()->json(['related' => $related->forUser(auth()->id(), $terms)]);
     }
 
     /**

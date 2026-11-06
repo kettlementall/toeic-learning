@@ -10,7 +10,7 @@ class Word extends Model
     protected $fillable = [
         'word', 'phonetic', 'audio_url', 'part_of_speech',
         'definition_en', 'definition_zh', 'meanings', 'example', 'toeic_note',
-        'mnemonic', 'study_note', 'synonyms', 'level', 'category', 'source', 'raw_json',
+        'mnemonic', 'study_note', 'related', 'synonyms', 'level', 'category', 'source', 'raw_json',
         'frequency_rank',
     ];
 
@@ -18,6 +18,7 @@ class Word extends Model
         'raw_json' => 'array',
         'meanings' => 'array',
         'study_note' => 'array',
+        'related' => 'array',
         'level' => 'integer',
         'frequency_rank' => 'integer',
     ];

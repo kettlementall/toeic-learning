@@ -16,6 +16,7 @@
         'leech' => $uw->is_leech,
         'lapses' => (int) $uw->lapses,
         'study_note' => $uw->dictionary?->study_note,
+        'related' => [], // filled for the whole sitting by fetchRelated()
         'grade_url' => route('review.grade', $uw),
     ])->values();
 @endphp
@@ -75,6 +76,21 @@
                         <p x-show="!contextShown" class="italic text-slate-400 mt-2" x-text="current.example || (loadingExample ? 'Generating an example…' : '')"></p>
                         <p class="text-sm text-amber-700 mt-2" x-show="current.mnemonic || loadingMnemonic"
                            x-text="current.mnemonic ? ('💡 ' + current.mnemonic) : (loadingMnemonic ? '💡 產生記憶小技巧中…' : '')"></p>
+
+                        <!-- near-synonyms already known: only after the answer, never as a hint -->
+                        <template x-if="current.related && current.related.length">
+                            <div class="mt-4 text-left border-t pt-3">
+                                <div class="text-xs font-semibold text-slate-500 mb-1">Words you know with a similar meaning</div>
+                                <template x-for="r in current.related" :key="r.word">
+                                    <div class="text-slate-700 py-0.5">
+                                        <span class="font-semibold" x-text="r.word"></span>
+                                        <span class="text-slate-500" x-show="r.zh" x-text="r.zh"></span>
+                                        <span class="text-slate-400">—</span>
+                                        <span x-text="r.note"></span>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
 
                         <!-- a word that keeps failing gets more to hang on to -->
                         <template x-if="current.leech">
@@ -153,6 +169,19 @@ function reviewSession(cards) {
         init() {
             this.prefetchNote();
             this.$watch('index', () => this.prefetchNote());
+            this.fetchRelated();
+        },
+        // one request for the whole sitting: known near-synonyms per card,
+        // generating any the server has never asked for
+        async fetchRelated() {
+            if (!this.cards.length) return;
+            const params = new URLSearchParams();
+            this.cards.forEach(c => params.append('q[]', c.word));
+            try {
+                const r = await fetch('{{ route('words.related') }}?' + params);
+                const data = await r.json();
+                this.cards.forEach(c => { c.related = data.related?.[c.word] || []; });
+            } catch (e) {}
         },
         // start a leech's study note as soon as the card shows, so it is
         // ready by the time the answer is revealed

@@ -35,6 +35,7 @@ Route::middleware('auth')->group(function () {
     Route::get('/words/example', [WordController::class, 'example'])->name('words.example');
     Route::get('/words/mnemonic', [WordController::class, 'mnemonic'])->name('words.mnemonic');
     Route::get('/words/study-note', [WordController::class, 'studyNote'])->name('words.study-note');
+    Route::get('/words/related', [WordController::class, 'related'])->name('words.related');
 
     // Custom vocabulary library
     Route::get('/vocabulary', [VocabularyController::class, 'index'])->name('vocabulary.index');
