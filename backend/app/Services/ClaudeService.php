@@ -16,8 +16,22 @@ class ClaudeService
         return ! empty(config('services.anthropic.api_key'));
     }
 
+    /** How to pick a word's meanings: shared by every prompt that writes them. */
+    private const SENSE_RULES = '以多益(TOEIC)商務／職場最常考的意思為準，每個詞性一條，只列多益會用到的詞性，依多益常考程度排序，最多3條；'
+        . '字典釋義常把古老、方言或罕用的意思排在前面，這些一律不要。';
+
     /**
-     * Supplement dictionary data with Chinese translation + TOEIC usage notes.
+     * Pick a word's TOEIC senses out of the dictionary's definitions, with
+     * Chinese, plus a usage note and a mnemonic — one call per lookup.
+     *
+     * The dictionary's own order is no guide: its first definition per part of
+     * speech is often archaic or dialectal ("lease" → "(dialectal) to gather"),
+     * and a word can come back as several homographs with the common one last.
+     * So the model sees every candidate (`candidates`, from all entries) and
+     * chooses, rather than translating the first one.
+     *
+     * Returns `{meanings: [{pos, definition_en, definition_zh, example}],
+     * toeic_note, mnemonic}`.
      */
     public function enrich(string $word, array $dictData): array
     {
@@ -25,36 +39,118 @@ class ClaudeService
             return [];
         }
 
-        // translate every part of speech, keeping order so the caller can zip
-        // the Chinese back onto each meaning.
-        $meanings = $dictData['meanings'] ?? [];
-        if (empty($meanings)) {
-            $meanings = [[
+        $candidates = $dictData['candidates'] ?? $dictData['meanings'] ?? [];
+        if (empty($candidates)) {
+            $candidates = [[
                 'pos' => $dictData['part_of_speech'] ?? '',
                 'definition_en' => $dictData['definition_en'] ?? '',
             ]];
         }
+        $list = implode("\n", array_map(
+            fn ($m) => '- (' . ($m['pos'] ?? '') . ') ' . ($m['definition_en'] ?? ''),
+            $candidates,
+        ));
+
+        $rules = self::SENSE_RULES;
+
+        $prompt = <<<PROMPT
+你是多益(TOEIC)英語教學專家。單字 "{$word}" 的字典釋義如下（僅供參考，順序不代表常用程度）：
+{$list}
+請整理出它的意思：{$rules}字典沒列到的多益常用意思也可以補上。每條附簡潔的英文釋義、繁體中文翻譯、一句多益情境的英文例句。
+另給整體一句多益用法提示，並給一句幫助記憶的小技巧。
+只回傳 JSON，不要其他文字，格式如下：
+{"meanings": [{"pos": "noun/verb/adjective/adverb...", "definition_en": "簡潔的英文釋義", "definition_zh": "繁體中文翻譯", "example": "一句英文例句"}], "toeic_note": "多益常見搭配詞或用法提示(繁體中文，30字內)", "mnemonic": "記憶小技巧(繁體中文，諧音/字根字首/拆字/聯想擇一，須與字義相關，30字內)"}
+PROMPT;
+
+        $json = $this->callJson($prompt, 1500);
+
+        return is_array($json) ? $json : [];
+    }
+
+    /**
+     * Rewrite already-stored words' meanings around their TOEIC senses — the
+     * repair for entries imported before enrich() chose senses. The stored
+     * meanings go in only as a hint: they may be the dialectal homograph and
+     * nothing else, so the model writes the TOEIC senses itself.
+     *
+     * @param  array  $items  [{word, meanings: [{pos, definition_en}]}]
+     * @return array<string, array<array{pos: string, definition_en: string, definition_zh: string, example: ?string}>>
+     */
+    public function toeicMeanings(array $items): array
+    {
+        $items = array_values(array_filter($items, fn ($i) => ! empty($i['word'])));
+
+        if (! $this->hasKey() || empty($items)) {
+            return [];
+        }
 
         $lines = [];
-        foreach ($meanings as $i => $m) {
-            $n = $i + 1;
-            $pos = $m['pos'] ?? '';
-            $en = $m['definition_en'] ?? '';
-            $lines[] = "{$n}. ({$pos}) {$en}";
+        foreach ($items as $i) {
+            $hint = implode('；', array_map(
+                fn ($m) => '(' . ($m['pos'] ?? '') . ') ' . ($m['definition_en'] ?? ''),
+                $i['meanings'] ?? [],
+            ));
+            $lines[] = $hint !== '' ? "{$i['word']} — 現有釋義：{$hint}" : $i['word'];
         }
         $list = implode("\n", $lines);
 
+        $rules = self::SENSE_RULES;
+
         $prompt = <<<PROMPT
-你是多益(TOEIC)英語教學專家。針對單字 "{$word}" 的各詞性英文釋義如下：
+你是多益(TOEIC)英語教學專家兼字典編輯。以下單字的「現有釋義」是早期從字典匯入的，常常是古老、方言或罕用的意思，僅供參考：
 {$list}
-請「依相同順序、相同數量」為每一條提供簡潔的繁體中文翻譯，給整體一句多益用法提示，並給一句幫助記憶的小技巧。
-只回傳 JSON，不要其他文字，格式如下：
-{"meanings": [{"definition_zh": "第1條的中文翻譯"}], "toeic_note": "多益常見搭配詞或用法提示(繁體中文，30字內)", "mnemonic": "記憶小技巧(繁體中文，諧音/字根字首/拆字/聯想擇一，須與字義相關，30字內)"}
+
+請為每個單字重新整理意思：{$rules}每條附簡潔的英文釋義、繁體中文翻譯、一句多益情境的英文例句。
+只回傳 JSON 物件，鍵為小寫單字本身，不要其他文字：
+{"lease": [{"pos": "noun", "definition_en": "a contract to rent property for a period", "definition_zh": "租約；租賃合約", "example": "We signed a five-year lease on the office."}]}
 PROMPT;
 
-        $json = $this->callJson($prompt, 1024);
+        // Same malformed-JSON retry strategy as generateExamples().
+        for ($attempt = 0; $attempt < 3; $attempt++) {
+            $json = $this->callJson($prompt, min(8192, 700 * count($items)));
+            if (! is_array($json)) {
+                continue;
+            }
 
-        return is_array($json) ? $json : [];
+            $out = [];
+            foreach ($json as $word => $meanings) {
+                if (! is_string($word) || ! is_array($meanings)) {
+                    continue;
+                }
+                $clean = self::cleanMeanings($meanings);
+                if ($clean) {
+                    $out[strtolower(trim($word))] = $clean;
+                }
+            }
+
+            if (! empty($out)) {
+                return $out;
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * Keep only well-formed meanings: a part of speech, English and Chinese.
+     *
+     * @return array<array{pos: string, definition_en: string, definition_zh: string, example: ?string}>
+     */
+    public static function cleanMeanings(array $meanings): array
+    {
+        return collect($meanings)
+            ->filter(fn ($m) => is_array($m)
+                && is_string($m['pos'] ?? null) && trim($m['pos']) !== ''
+                && is_string($m['definition_en'] ?? null) && trim($m['definition_en']) !== ''
+                && is_string($m['definition_zh'] ?? null) && trim($m['definition_zh']) !== '')
+            ->map(fn ($m) => [
+                'pos' => strtolower(trim($m['pos'])),
+                'definition_en' => trim($m['definition_en']),
+                'definition_zh' => trim($m['definition_zh']),
+                'example' => is_string($m['example'] ?? null) && trim($m['example']) !== '' ? trim($m['example']) : null,
+            ])
+            ->values()
+            ->all();
     }
 
     /**
@@ -77,7 +173,7 @@ PROMPT;
 如果它不是一個真正的英文單字(例如拼錯或亂打)，只回傳 {"valid": false}，不要勉強解釋。
 否則只回傳 JSON，不要其他文字，格式如下：
 {"valid": true, "phonetic": "IPA音標，含前後斜線", "meanings": [{"pos": "詞性(noun/verb/adjective/adverb/preposition...)", "definition_en": "簡潔的英文釋義", "definition_zh": "簡潔的繁體中文翻譯", "example": "一句英文例句"}], "toeic_note": "多益常見搭配詞或用法提示(繁體中文，30字內)", "synonyms": "同義字，英文逗號分隔，最多6個", "mnemonic": "記憶小技巧(繁體中文，諧音/字根字首/拆字/聯想擇一，須與字義相關，30字內)"}
-meanings 每個詞性一條，依常用程度排序，最多4條。
+meanings 每個詞性一條，以多益(TOEIC)商務／職場最常考的意思為準、依多益常考程度排序，最多4條；不要列古老、方言或罕用的意思。
 PROMPT;
 
         $json = $this->callJson($prompt, 1024);
@@ -124,7 +220,7 @@ PROMPT;
 其中不是真正英文單字的(例如拼錯或亂打)，直接從結果中省略，不要勉強解釋。
 只回傳 JSON，不要其他文字，格式如下(key 為小寫單字本身)：
 {"單字": {"phonetic": "IPA音標，含前後斜線", "meanings": [{"pos": "詞性(noun/verb/adjective/adverb/preposition...)", "definition_en": "簡潔的英文釋義", "definition_zh": "簡潔的繁體中文翻譯", "example": "一句英文例句"}], "toeic_note": "多益常見搭配詞或用法提示(繁體中文，30字內)", "synonyms": "同義字，英文逗號分隔，最多6個", "mnemonic": "記憶小技巧(繁體中文，諧音/字根字首/拆字/聯想擇一，須與字義相關，30字內)"}}
-每個單字的 meanings 每個詞性一條，依常用程度排序，最多4條。
+每個單字的 meanings 每個詞性一條，以多益(TOEIC)商務／職場最常考的意思為準、依多益常考程度排序，最多4條；不要列古老、方言或罕用的意思。
 PROMPT;
 
         $json = $this->callJson($prompt, min(8192, 900 * count($words)));

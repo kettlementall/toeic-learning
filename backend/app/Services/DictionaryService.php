@@ -128,21 +128,23 @@ class DictionaryService
         // fallback already carries the Chinese, so it skips the second call.
         $enrich = ($dict['enriched'] ?? false) ? $dict : $this->claude->enrich($term, $dict);
 
-        // zip the Chinese translations back onto each meaning (same order)
-        $meanings = $dict['meanings'] ?? [];
-        $zh = $enrich['meanings'] ?? [];
-        foreach ($meanings as $i => $m) {
-            $meanings[$i]['definition_zh'] = $zh[$i]['definition_zh'] ?? null;
-        }
-        $primaryZh = $meanings[0]['definition_zh'] ?? ($cached->definition_zh ?? null);
+        // The senses the model chose for TOEIC replace the dictionary's own
+        // first-per-part-of-speech picks. Without a usable choice (no key, a
+        // failed call) the dictionary meanings are kept, untranslated, and the
+        // word stays unchecked for words:fix-meanings to repair later.
+        $chosen = ClaudeService::cleanMeanings($enrich['meanings'] ?? []);
+        $meanings = $chosen ?: ($dict['meanings'] ?? []);
+        $first = $meanings[0] ?? [];
+        $primaryZh = $first['definition_zh'] ?? ($cached->definition_zh ?? null);
 
         $data = [
             'phonetic' => $dict['phonetic'] ?? null,
             'audio_url' => $dict['audio_url'] ?? null,
-            'part_of_speech' => $dict['part_of_speech'] ?? null,
-            'definition_en' => $dict['definition_en'] ?? null,
-            'example' => $dict['example'] ?? null,
+            'part_of_speech' => $first['pos'] ?? ($dict['part_of_speech'] ?? null),
+            'definition_en' => $first['definition_en'] ?? ($dict['definition_en'] ?? null),
+            'example' => ($first['example'] ?? null) ?: ($dict['example'] ?? null),
             'meanings' => $meanings,
+            'senses_checked_at' => $chosen ? now() : null,
             'synonyms' => $dict['synonyms'] ?? null,
             'definition_zh' => $primaryZh,
             'toeic_note' => $enrich['toeic_note'] ?? null,
@@ -241,6 +243,19 @@ class DictionaryService
         // primary (scalar) fields mirror the first meaning for backward compatibility
         $first = $meanings[0] ?? [];
 
+        // every sense across every homograph entry, for enrich() to choose from:
+        // the first definition of the first entry is often the dialectal one
+        $candidates = [];
+        foreach ($json as $e) {
+            foreach (($e['meanings'] ?? []) as $meaning) {
+                foreach (array_slice($meaning['definitions'] ?? [], 0, 4) as $d) {
+                    if (! empty($d['definition']) && count($candidates) < 24) {
+                        $candidates[] = ['pos' => $meaning['partOfSpeech'] ?? null, 'definition_en' => $d['definition']];
+                    }
+                }
+            }
+        }
+
         return [
             'phonetic' => $phonetic,
             'audio_url' => $audio,
@@ -248,6 +263,7 @@ class DictionaryService
             'definition_en' => $first['definition_en'] ?? null,
             'example' => $first['example'] ?? null,
             'meanings' => $meanings,
+            'candidates' => $candidates,
             'synonyms' => $synonyms ? implode(', ', array_slice(array_unique($synonyms), 0, 6)) : null,
             'raw' => $entry,
         ];

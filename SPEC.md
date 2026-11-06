@@ -170,11 +170,28 @@ boost). Drives all dashboard stats and adaptive grammar selection.
   `definition_en`) → **dictionaryapi.dev** → **Claude enrich**. A `force` flag
   bypasses the cache (used for backfilling meanings).
 - **FR-3** Dictionary normalization keeps **one entry per part of speech**
-  (first definition + example each), aggregates ≤6 unique synonyms, extracts
-  phonetic + first available audio.
-- **FR-4** Enrichment asks Claude to translate **each** meaning into Chinese in
-  the same order/count, plus one overall TOEIC note; results are zipped back
-  onto `meanings` and the primary `definition_zh`.
+  (first definition + example each) as a fallback, aggregates ≤6 unique
+  synonyms, extracts phonetic + first available audio, and collects
+  `candidates`: up to 4 definitions per part of speech across **every**
+  homograph entry (≤24). The dictionary's order is no guide to TOEIC use — the
+  first definition is often archaic or dialectal, and a word can return
+  several entries with the common one last ("lease" leads with "(dialectal) to
+  gather").
+- **FR-4** Enrichment shows Claude every candidate and has it **choose** the
+  word's meanings by TOEIC sense (one per part of speech, only parts of speech
+  TOEIC uses, ordered by how often they are tested, ≤3, archaic/dialectal
+  senses dropped), each with English, Chinese and a TOEIC-style example, plus
+  a TOEIC note and mnemonic — still one call. The chosen meanings replace the
+  dictionary's; the first sets `part_of_speech`, `definition_en`,
+  `definition_zh` and `example`, and `senses_checked_at` is stamped. If the
+  call fails, the dictionary meanings are kept and the word stays unchecked.
+  The AI-written fallback entries (outage path) follow the same sense rule.
+- **FR-4a** `php artisan words:fix-meanings` (`--limit`, `--chunk`,
+  `--user-id`) repairs entries imported before FR-4: for library words with no
+  `senses_checked_at`, `ClaudeService::toeicMeanings()` rewrites the meanings
+  in batches of 10, with the stored ones passed only as a hint (they may be
+  the dialectal homograph and nothing else). Words the model skips stay
+  unchecked, so a rerun picks them up.
 - **FR-5** A successful lookup **auto-adds** the word to `user_words` with
   `source=search` and `next_review_at=today` (idempotent via `firstOrNew`).
 - **FR-6** Errors: empty term ⇒ 422; not found ⇒ 404; both as JSON messages.

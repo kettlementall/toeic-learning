@@ -11,7 +11,7 @@ class Word extends Model
         'word', 'phonetic', 'audio_url', 'part_of_speech',
         'definition_en', 'definition_zh', 'meanings', 'example', 'toeic_note',
         'mnemonic', 'study_note', 'related', 'synonyms', 'level', 'category', 'source', 'raw_json',
-        'frequency_rank',
+        'frequency_rank', 'senses_checked_at',
     ];
 
     protected $casts = [
@@ -21,6 +21,7 @@ class Word extends Model
         'related' => 'array',
         'level' => 'integer',
         'frequency_rank' => 'integer',
+        'senses_checked_at' => 'datetime',
     ];
 
     /** Words from the curated TOEIC high-frequency list, most common first. */
