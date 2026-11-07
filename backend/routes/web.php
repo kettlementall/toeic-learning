@@ -4,6 +4,7 @@ use App\Http\Controllers\Admin\UserController as AdminUserController;
 use App\Http\Controllers\Auth\AuthenticatedSessionController;
 use App\Http\Controllers\Auth\RegisteredUserController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\PracticeMediaController;
 use App\Http\Controllers\QuizController;
 use App\Http\Controllers\ReviewController;
 use App\Http\Controllers\VocabularyController;
@@ -53,6 +54,10 @@ Route::middleware('auth')->group(function () {
     Route::get('/quiz/{quiz}', [QuizController::class, 'show'])->name('quiz.show');
     Route::post('/quiz/{quiz}/submit', [QuizController::class, 'submit'])->name('quiz.submit');
     Route::get('/quiz/{quiz}/review', [QuizController::class, 'review'])->name('quiz.review');
+
+    // Real-test practice bank (fixed course questions; separate from quizzes)
+    Route::get('/practice/media/{path}', [PracticeMediaController::class, 'show'])
+        ->where('path', '.*')->name('practice.media');
 
     // ---------------------------------------------------------------------
     // Admin user management (admin-only)
