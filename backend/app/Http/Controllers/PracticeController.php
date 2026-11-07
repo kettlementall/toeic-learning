@@ -92,11 +92,14 @@ class PracticeController extends Controller
             $remaining = max(0, $attempt->time_limit_seconds - (int) $attempt->started_at->diffInSeconds(now()));
         }
 
+        $blocks = $this->blocks($questions);
+
         return view('practice.take', [
             'attempt' => $attempt->load('set'),
-            'blocks' => $this->blocks($questions),
+            'blocks' => $blocks,
             'total' => $questions->count(),
             'remaining' => $remaining,
+            'playlist' => $attempt->mode === 'mock' && $attempt->section === 'listening' ? $this->playlist($blocks) : null,
         ]);
     }
 
@@ -182,6 +185,23 @@ class PracticeController extends Controller
         }
 
         return $blocks;
+    }
+
+    /**
+     * The listening mock's running order: each block's tracks, then an answer
+     * window sized like the exam's (per question, by part).
+     */
+    private function playlist(Collection $blocks): array
+    {
+        $gaps = config('practice.answer_gap_seconds');
+
+        return $blocks->map(fn ($b) => [
+            'tracks' => collect($b['group']?->audio ?? [])->map(fn ($t) => route('practice.media', ['path' => $t]))->all(),
+            'gap' => $b['questions']->sum(fn ($q) => $gaps[$q->part] ?? 8),
+            'label' => $b['questions']->count() > 1
+                ? $b['questions']->first()->number . '–' . $b['questions']->last()->number
+                : (string) $b['questions']->first()->number,
+        ])->values()->all();
     }
 
     private function authorizeOwner(PracticeAttempt $attempt): void

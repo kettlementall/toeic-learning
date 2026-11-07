@@ -104,6 +104,32 @@ class PracticeFlowTest extends TestCase
             ->assertSee('At a hotel'); // Part 3 options are printed on the real paper
     }
 
+    public function test_listening_mock_gets_a_running_order_and_practice_does_not(): void
+    {
+        $user = User::factory()->create();
+        $listening = PracticeSet::where('code', 'demo-listening')->first();
+
+        $this->actingAs($user)->post("/practice/sets/{$listening->id}/start", ['mode' => 'mock']);
+        $mock = PracticeAttempt::latest('id')->first();
+        $playlist = $this->actingAs($user)->get("/practice/attempts/{$mock->id}")->assertOk()
+            ->assertSee('plays <strong>once</strong>', false)
+            ->viewData('playlist');
+
+        $this->assertCount(2, $playlist);
+        $this->assertSame(['7', 5], [$playlist[0]['label'], $playlist[0]['gap']], 'Part 2: one item, 5s');
+        $this->assertSame(8, $playlist[1]['gap'], 'Part 3: 8s per question');
+        $this->assertStringEndsWith('/practice/media/audio/demo/q1.mp3', $playlist[0]['tracks'][0]);
+
+        $this->actingAs($user)->post("/practice/sets/{$listening->id}/start", ['mode' => 'practice']);
+        $practice = PracticeAttempt::latest('id')->first();
+        $this->assertNull($this->actingAs($user)->get("/practice/attempts/{$practice->id}")->viewData('playlist'));
+
+        $reading = PracticeSet::where('code', 'demo-reading')->first();
+        $this->actingAs($user)->post("/practice/sets/{$reading->id}/start", ['mode' => 'mock']);
+        $readingMock = PracticeAttempt::latest('id')->first();
+        $this->assertNull($this->actingAs($user)->get("/practice/attempts/{$readingMock->id}")->viewData('playlist'));
+    }
+
     public function test_attempts_belong_to_their_owner(): void
     {
         $owner = User::factory()->create();

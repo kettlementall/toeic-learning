@@ -8,7 +8,7 @@
 @endphp
 
 <div class="max-w-3xl mx-auto"
-     x-data="practiceTake({ remaining: @js($remaining), total: {{ $total }} })"
+     x-data="practiceTake({ remaining: @js($remaining), total: {{ $total }}, playlist: @js($playlist) })"
      x-init="init()">
     <div class="sticky top-14 z-10 -mx-4 px-4 py-2 bg-slate-50/95 backdrop-blur border-b mb-4 flex items-center gap-3"
          style="top: calc(3.5rem + env(safe-area-inset-top, 0px))">
@@ -23,12 +23,35 @@
         </template>
     </div>
 
+    @if ($playlist)
+        <div class="bg-indigo-50 border border-indigo-200 rounded-xl p-4 mb-4 text-sm">
+            <template x-if="phase === 'idle'">
+                <div class="flex flex-wrap items-center gap-3">
+                    <p class="flex-1 min-w-[14rem] text-indigo-900">Each recording plays <strong>once</strong>, in order, like the real test — no pausing or replaying. After each one you get answer time, then the next starts by itself. Turn your sound on first.</p>
+                    <button type="button" @click="start()" class="px-4 py-2 rounded-lg bg-indigo-600 text-white font-medium hover:bg-indigo-700">▶ Start</button>
+                </div>
+            </template>
+            <template x-if="phase === 'playing'">
+                <p class="text-indigo-900"><span class="inline-block w-2 h-2 rounded-full bg-rose-500 animate-pulse mr-2"></span>Playing · questions <span class="font-semibold" x-text="playlist[current].label"></span> <span class="text-indigo-500" x-text="'(' + (current + 1) + ' of ' + playlist.length + ')'"></span></p>
+            </template>
+            <template x-if="phase === 'answering'">
+                <p class="text-indigo-900">Answer time for <span class="font-semibold" x-text="playlist[current].label"></span>: <span class="font-mono font-semibold" x-text="gapLeft + 's'"></span></p>
+            </template>
+            <template x-if="phase === 'done'">
+                <p class="text-indigo-900">That was the last recording — submitting…</p>
+            </template>
+            <p x-show="audioError" x-cloak class="mt-2 text-rose-700">A recording failed to load and was skipped.</p>
+        </div>
+        <audio x-ref="player" preload="auto" class="hidden" x-on:ended="trackEnded()" x-on:error="trackFailed()"></audio>
+    @endif
+
     <form method="post" action="{{ route('practice.submit', $attempt) }}" x-ref="form" @change="count()">
         @csrf
         <div class="space-y-5">
             @foreach ($blocks as $block)
                 @php $g = $block['group']; @endphp
-                <div class="bg-white rounded-xl border p-4 sm:p-5">
+                <div class="bg-white rounded-xl border p-4 sm:p-5 scroll-mt-32 transition" id="block-{{ $loop->index }}"
+                     :class="playlist && current === {{ $loop->index }} && phase !== 'idle' ? 'ring-2 ring-indigo-400' : ''">
                     @if ($g && $g->body)
                         <div class="text-sm leading-relaxed text-slate-700 space-y-1 mb-4 pb-4 border-b">
                             @if ($g->label)<p class="text-xs font-semibold text-slate-400 mb-1">Questions {{ $g->label }}</p>@endif
@@ -77,9 +100,63 @@
 </div>
 
 <script>
-    function practiceTake({ remaining, total }) {
+    function practiceTake({ remaining, total, playlist }) {
         return {
             remaining, total, answered: 0, confirming: false, submitting: false, deadline: null,
+            // listening mock
+            playlist, phase: 'idle', current: 0, track: 0, gapLeft: 0, audioError: false, step: 0, trackToken: 0, failedToken: null,
+            start() {
+                if (this.phase !== 'idle') return;
+                this.current = 0;
+                this.playBlock();
+            },
+            playBlock() {
+                this.phase = 'playing';
+                this.track = 0;
+                document.getElementById('block-' + this.current)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                this.playTrack();
+            },
+            playTrack() {
+                const block = this.playlist[this.current];
+                if (this.track >= block.tracks.length) return this.answerWindow();
+                const a = this.$refs.player;
+                const token = ++this.trackToken;
+                a.src = block.tracks[this.track];
+                a.play().catch(() => this.trackFailed(token));
+            },
+            trackEnded() {
+                if (this.phase !== 'playing') return;
+                this.track++;
+                this.playTrack();
+            },
+            trackFailed(token = this.trackToken) {
+                // play() rejecting and the error event can both report one failure
+                if (this.phase !== 'playing' || token !== this.trackToken || token === this.failedToken) return;
+                this.failedToken = token;
+                this.audioError = true;
+                this.track++;
+                this.playTrack();
+            },
+            answerWindow() {
+                this.phase = 'answering';
+                const step = ++this.step; // a stale timer from an earlier block must not advance this one
+                this.gapLeft = this.playlist[this.current].gap;
+                const tick = () => {
+                    if (step !== this.step) return;
+                    if (this.gapLeft <= 0) return this.nextBlock();
+                    this.gapLeft--;
+                    setTimeout(tick, 1000);
+                };
+                setTimeout(tick, 1000);
+            },
+            nextBlock() {
+                this.current++;
+                if (this.current >= this.playlist.length) {
+                    this.phase = 'done';
+                    return this.finish();
+                }
+                this.playBlock();
+            },
             init() {
                 this.count();
                 if (this.remaining !== null) {
