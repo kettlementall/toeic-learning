@@ -47,6 +47,13 @@ can manage accounts.
 - **Dashboard** — totals, due count, completed quizzes, average accuracy, a
   recent-score trend, grammar-weakness ranking, vocab weakness by part of
   speech, leech list, and the latest AI-recommended grammar focus.
+- **Real-test practice** (`/practice`) — fixed questions from your course
+  material: Part 5–6 mock tests, lecture reading reviews (Parts 5–7), lecture
+  listening reviews (Parts 1–4, real recordings) and dictation. Timed mocks
+  (listening plays each track once, like the exam) or untimed practice, the
+  handout's explanation plus an on-demand AI explanation, retry of what you
+  missed, and accuracy by part and skill. Kept completely separate from quizzes:
+  it never changes your vocabulary schedule or quiz stats.
 - **Responsive UI** — the top navigation collapses into a hamburger menu on
   phones (<768px).
 - **Built-in TTS** — the browser's speech synthesis pronounces any word, even
@@ -225,6 +232,15 @@ require `is_admin`.
 | GET    | `/quiz/{quiz}`            | `quiz.show`         | Take the quiz                        |
 | POST   | `/quiz/{quiz}/submit`     | `quiz.submit`       | Submit answers                       |
 | GET    | `/quiz/{quiz}/review`     | `quiz.review`       | Results + AI review                  |
+| GET    | `/practice`               | `practice.index`    | Practice bank: sets, retry, accuracy |
+| POST   | `/practice/sets/{set}/start` | `practice.start` | Start a sitting (`mode` = mock\|practice) |
+| GET    | `/practice/attempts/{attempt}` | `practice.show` | Take a sitting                     |
+| POST   | `/practice/attempts/{attempt}/submit` | `practice.submit` | Grade a sitting             |
+| GET    | `/practice/attempts/{attempt}/result` | `practice.result` | Result + explanations       |
+| POST   | `/practice/retry`         | `practice.retry`    | Sit your missed questions            |
+| POST   | `/practice/questions/{question}/explain` | `practice.explain` | Cached AI explanation (JSON) |
+| GET    | `/practice/sets/{set}/dictation` | `practice.dictation` | Dictation page               |
+| GET    | `/practice/media/{path}`  | `practice.media`    | Audio/photos (signed-in only)        |
 | GET    | `/admin/users`            | `admin.users.index` | User list + stats (admin)            |
 | POST   | `/admin/users`            | `admin.users.store` | Create a user (admin)                |
 | PUT    | `/admin/users/{user}`     | `admin.users.update`| Toggle active / reset password (admin)|
@@ -246,6 +262,16 @@ require `is_admin`.
 php artisan words:backfill-examples              # up to 200 words, 20 per AI request
 php artisan words:backfill-examples --limit=50   # cap the AI calls
 php artisan words:backfill-examples --chunk=10   # fewer words per AI request
+```
+
+Load or update the practice bank (set JSON files plus audio/photos under
+`backend/storage/app/private/practice/`, which is **not** in git — the course
+material is licensed for personal study; back it up separately):
+
+```bash
+php artisan practice:import --dry-run   # validate every set file and media path
+php artisan practice:import             # upsert in place; answers already given keep their questions
+php artisan practice:import --only=zhuifen-1
 ```
 
 Cards with no stored example also generate one **on the fly**: the daily-review

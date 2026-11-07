@@ -18,6 +18,10 @@ through three reinforcing loops:
 3. **Assess & adapt** — AI-generated quizzes target the learner's weak words and
    weak grammar points; results feed back into both the scheduler and the
    adaptive question selector.
+4. **Sit the real thing** — a separate practice bank of fixed questions from
+   the learner's course material (reading Parts 5–7, listening Parts 1–4 with
+   the real recordings, dictation), taken as timed mocks or untimed practice
+   (§3.9). Deliberately walled off from loops 1–3.
 
 ### 1.2 Scope & assumptions
 - **Multi-user.** Session-cookie authentication; every user has a private
@@ -31,7 +35,9 @@ through three reinforcing loops:
   still function and AI features are disabled with a visible banner.
 
 ### 1.3 Non-goals
-- Listening/reading full-test simulation (Parts 1–4, 6, 7).
+- Generated listening (synthetic audio) and full 200-question simulations.
+  Listening and Parts 6–7 are practised only on the fixed course material in
+  the practice bank (§3.9), never generated.
 - Sharing or social features; cross-user data sharing.
 - Email verification / password-reset-by-email flows (admins reset passwords).
 - Mobile native apps (the web UI is responsive instead).
@@ -135,11 +141,27 @@ boost). Drives all dashboard stats and adaptive grammar selection.
 | `quality`       | tinyint     | 0–5 (SM-2 grade; `<3` counts as wrong)  |
 | `reviewed_at`   | timestamp   | event time                              |
 
+#### Practice bank — `practice_*` (fixed course questions, §3.9)
+Shared reference content plus per-user sittings. **Isolated by design**: nothing
+here reads or writes `quizzes`, `quiz_questions`, `user_words` or `review_logs`.
+
+| Table                | Key columns | Notes |
+|----------------------|-------------|-------|
+| `practice_sets`      | `code` (unique), `title`, `source` (`zhuifen`\|`lecture`), `section` (`reading`\|`listening`\|`dictation`), `week`, `time_limit_seconds`, `sort` | one sittable unit: a mock test or a review exercise |
+| `practice_groups`    | `set_id`, `key` (unique per set), `label`, `body`, `audio` (json list of paths), `transcript`, `image_path` | a passage, conversation/talk, chart, or single Part 1/2 item |
+| `practice_questions` | `set_id`, `group_id`, `number` (as printed, unique per set), `part` 1–7, `stem`, `options` (json, 3 for Part 2 else 4, **source order, never shuffled**), `answer`, `answer_source`, `skill`, `explanation`, `ai_explanation`, `ai_model` | `answer_source`: `verified` (class notes = independent solve), `solved` (no usable notes; two independent solves agree), `supplement` (stated in the handout) |
+| `practice_dictations`| `set_id`, `number`, `audio`, `transcript` | listen-and-type items |
+| `practice_attempts`  | `user_id`, `set_id` (null for a retry mix), `mode` (`mock`\|`practice`\|`retry`), `section`, `question_ids` (json, in order), `status`, `score`/`total` (smallint), `time_limit_seconds`, `started_at`, `completed_at` | one sitting |
+| `practice_answers`   | `attempt_id`, `user_id`, `question_id`, `choice` (null = blank), `is_correct` | indexed `(user_id, question_id)` |
+
 ### 2.2 Relationships
 - `User` 1—* `UserWord` / `Quiz` / `ReviewLog` (all `cascadeOnDelete`).
 - `Word` 1—* `UserWord` (`UserWord.dictionary` = `belongsTo Word`).
 - `Quiz` 1—* `QuizQuestion`.
 - `ReviewLog` references `UserWord` and/or `Quiz` (both nullable).
+- `PracticeSet` 1—* `PracticeGroup` / `PracticeQuestion` / `PracticeDictation`;
+  `PracticeGroup` 1—* `PracticeQuestion`; `User` 1—* `PracticeAttempt` 1—*
+  `PracticeAnswer` *—1 `PracticeQuestion`.
 
 ---
 
@@ -481,7 +503,8 @@ boost). Drives all dashboard stats and adaptive grammar selection.
 - **FR-34a** **Reading score estimate** (`ScoreEstimateService`). A rough TOEIC
   Reading score (5–495) with a likely range and a confidence level, from the
   learner's own quiz answers over the last `toeic_estimate.window_days`.
-  **Listening is not estimated** — nothing in the app tests it.
+  **Listening is not estimated** — the practice bank (§3.9) tests it, but its
+  results are deliberately kept out of this estimate (FR-44).
   - Reads `quiz_questions.is_correct` only, never `review_logs`: `boostGrammar()`
     (FR-28) writes quality-1 rows for AI-suggested points, which would count as
     wrong answers that were never given.
@@ -504,6 +527,59 @@ boost). Drives all dashboard stats and adaptive grammar selection.
 ### 3.8 Responsive UI
 - **FR-35** Top navigation shows inline links ≥768px and a collapsible
   hamburger menu <768px (Alpine.js toggle). `[x-cloak]` prevents flash on load.
+
+### 3.9 Real-test practice bank (`PracticeController`, `PracticeService`, `PracticeImporter`)
+Fixed questions from the learner's course material (a five-test Part 5–6 mock
+series and the W1–W5 lecture reviews), sat as many times as the learner likes.
+- **FR-36** **Isolation.** The bank writes only `practice_attempts` and
+  `practice_answers`. It never touches the SM-2 schedule, the quiz builder's
+  cooldowns (`recentlyTestedPenalties` looks at the last three quizzes of any
+  type, so mock tests stored as quizzes would push vocab rounds out of the
+  window) or the dashboard figures. `PracticeIsolationTest` pins this.
+- **FR-37** **Import.** `php artisan practice:import [dir] [--only=] [--dry-run]`
+  loads one JSON file per set from `config('practice.root')`. Every file is
+  validated before anything is written (options 3 for Part 2 / 4 otherwise,
+  answer within the options, known `skill`, passage/audio groups present, media
+  files exist, no paths outside the root). Re-import matches sets, groups and
+  questions on their natural keys and updates in place; a question dropped from
+  a file is deleted only if nobody has answered it.
+- **FR-38** **Content stays out of git.** Set files, audio and Part 1 photos
+  live under `storage/app/private/practice` (licensed course material); backups
+  go to `~/toeic-backups`. Tests use made-up fixtures (`PracticeFixtures`).
+- **FR-39** `GET /practice` lists sets by section (mock tests, lecture reading,
+  lecture listening, dictation) with the learner's last and best score, resumable
+  unfinished sittings, a retry button per section, and accuracy by part and by
+  skill (weakest first).
+- **FR-40** **Modes.** `POST /practice/sets/{set}/start` with `mode`:
+  - *mock, reading* — counts down from `time_limit_seconds` (default 18 min)
+    measured from `started_at`, so a reload does not reset it; submits itself
+    at zero. The server records times but does not reject a late submit.
+  - *mock, listening* — one hidden audio element plays each group's tracks in
+    order (a conversation and its read-out questions may be two files), then an
+    answer window of `answer_gap_seconds` per question by part, then the next
+    group; submits after the last. No pause, seek or replay; Part 1/2 options
+    are hidden as on the paper; started from a button to satisfy autoplay rules.
+  - *practice* — untimed, native audio controls.
+- **FR-41** **Grading** (`POST /practice/attempts/{attempt}/submit`) stores one
+  `practice_answers` row per question (blank or invalid letters count as wrong)
+  and is idempotent. Attempts are owner-only (403).
+- **FR-42** **Result page** marks the key and the learner's choice, shows the
+  handout's explanation, the transcript for listening, the answer's provenance
+  when it is not `verified`, and an **AI explanation on demand**
+  (`POST /practice/questions/{question}/explain`): generated once per question by
+  `ClaudeService::explainPracticeQuestion` (passage/transcript included; letters
+  may be cited because options are never shuffled), cached for everyone; 503
+  without a key, failures not cached.
+- **FR-43** **Retry** (`POST /practice/retry`, `section`) builds a practice
+  sitting from questions whose *latest* answer by this user was wrong, up to
+  `retry_max`, in paper order.
+- **FR-44** **Dictation** (`GET /practice/sets/{set}/dictation`): play, type,
+  word-level diff against the transcript in the browser; nothing is stored or
+  scored. Practice results do not feed the score estimate (FR-34a) or grammar
+  weakness stats: real-test accuracy is shown on the practice page only.
+- **FR-45** **Media** (`GET /practice/media/{path}`) streams audio/images under
+  the practice root to signed-in users via `BinaryFileResponse` (Range → 206);
+  `realpath` containment blocks traversal; only mp3/png/jpg are served.
 
 ---
 
@@ -692,6 +768,16 @@ Human/Chinese labels are mapped in the dashboard and in
 Config keys live in `config/services.php` under `anthropic.*`,
 `dictionary.url`, and `news.*`.
 
+### 6.3 Practice bank (`config/practice.php`)
+
+| Key                       | Default | Meaning |
+|---------------------------|---------|---------|
+| `root`                    | `storage/app/private/practice` | set files + media (not in git) |
+| `default_reading_seconds` | 1080    | reading mock timer when a set gives none |
+| `answer_gap_seconds`      | Part 1/2: 5, Part 3/4: 8 | listening mock answer window per question |
+| `retry_max`               | 30      | questions per retry sitting |
+| `skills`                  | code → 中文 label | what each question tests; Part 5 reuses the ten grammar codes |
+
 ### 6.1 Scheduler tuning (`config/srs.php`)
 
 | Key                      | Default | Meaning                                                      |
@@ -746,6 +832,8 @@ unique key from `word` to `(user_id, word)`.
   empty or junk cards.
 - **SEC-5** Inputs are validated (`type`, `count` 1–20, `level` 1–5, `quality`
   0–5, string length caps on notes/tags).
+- **SEC-6** Practice-bank media is served only to authenticated users and only
+  from inside the practice root (FR-45); course material is never committed.
 
 ---
 
@@ -783,8 +871,15 @@ unique key from `word` to `(user_id, word)`.
 - Quiz generation is synchronous (request blocks up to ~90s on the AI call); a
   queued/async flow would improve UX for large quizzes.
 - Tags are free-text matched by `LIKE` (no normalized tag table).
-- Only TOEIC Part 5–style grammar and vocabulary are covered, not full-test
-  reading/listening sections.
+- Generated quizzes cover Part 5-style grammar, vocabulary and Part 7-style news
+  reading; Parts 1–4 and 6 exist only as the fixed practice bank (§3.9), whose
+  size is bounded by the course material.
+- Practice-bank answer keys come from the class's own marked-up handouts,
+  cross-checked by independent solving (`answer_source`); there is no official
+  key. Retyped charts and maps are text approximations of the printed graphics.
+- The listening mock timer and the reading countdown are enforced in the
+  browser only; the dictation sentences were taken from the learner's filled-in
+  handout, not checked against the audio.
 - The browser TTS fallback quality depends on the device's installed voices.
 - The Reading score estimate (FR-34a) is **uncalibrated**: generated questions
   carry no measured difficulty (`words.level` is almost uniformly 3), so
