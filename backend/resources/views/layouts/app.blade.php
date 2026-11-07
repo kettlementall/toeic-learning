@@ -17,6 +17,7 @@
             'vocabulary.index' => ['My Vocabulary', route('vocabulary.index')],
             'review.session' => ['Daily Review', route('review.session')],
             'quiz.create' => ['Quiz', route('quiz.create')],
+            'practice.*' => ['Practice', route('practice.index')],
         ];
     @endphp
     <nav class="bg-white border-b shadow-sm sticky top-0 z-10" x-data="{ open: false }">

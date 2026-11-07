@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\PracticeQuestion;
 use App\Models\Quiz;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -890,6 +891,49 @@ PROMPT;
     }
 
     // ---------- HTTP + parsing ----------
+
+    /**
+     * Explain one practice-bank question in Traditional Chinese: why the key is
+     * right and why each other option fails. Real course questions keep their
+     * printed option order, so letters are safe to cite here (unlike generated
+     * quizzes, which shuffle). Listening questions carry their transcript.
+     */
+    public function explainPracticeQuestion(PracticeQuestion $q): ?string
+    {
+        if (! $this->hasKey()) {
+            return null;
+        }
+
+        $options = collect($q->options)->map(fn ($o, $i) => '(' . chr(65 + $i) . ') ' . $o)->implode("\n");
+        $context = '';
+        if ($q->group?->body) {
+            $context .= "\n短文：\n" . $q->group->body . "\n";
+        }
+        if ($q->group?->transcript) {
+            $context .= "\n音檔逐字稿：\n" . $q->group->transcript . "\n";
+        }
+        $stem = $q->stem ?: ($q->part <= 2 ? '（聽力題，題目與選項在逐字稿中）' : "（短文中的第 {$q->number} 題空格）");
+
+        $prompt = <<<PROMPT
+你是多益(TOEIC)老師。請用繁體中文為下面這題 Part {$q->part} 真題寫一段給學生看的解說，只回傳 JSON：{"explanation": "..."}
+{$context}
+題號 {$q->number}：{$stem}
+{$options}
+正確答案：({$q->answer})
+
+解說要求：先說明為什麼 ({$q->answer}) 正確(指出關鍵字、文法規則或上下文線索)，再逐一簡短說明其他選項為什麼錯；必要時附上關鍵句的中譯。條列清楚，250 字以內，不要重複題目全文。
+PROMPT;
+
+        for ($attempt = 0; $attempt < 2; $attempt++) {
+            $json = $this->callJson($prompt, 1200);
+            $text = is_array($json) ? trim((string) ($json['explanation'] ?? '')) : '';
+            if ($text !== '') {
+                return $text;
+            }
+        }
+
+        return null;
+    }
 
     /**
      * Call the Anthropic Messages API and parse a JSON object/array out of the reply.

@@ -4,6 +4,7 @@ use App\Http\Controllers\Admin\UserController as AdminUserController;
 use App\Http\Controllers\Auth\AuthenticatedSessionController;
 use App\Http\Controllers\Auth\RegisteredUserController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\PracticeController;
 use App\Http\Controllers\PracticeMediaController;
 use App\Http\Controllers\QuizController;
 use App\Http\Controllers\ReviewController;
@@ -56,6 +57,14 @@ Route::middleware('auth')->group(function () {
     Route::get('/quiz/{quiz}/review', [QuizController::class, 'review'])->name('quiz.review');
 
     // Real-test practice bank (fixed course questions; separate from quizzes)
+    Route::get('/practice', [PracticeController::class, 'index'])->name('practice.index');
+    Route::post('/practice/retry', [PracticeController::class, 'retry'])->name('practice.retry');
+    Route::post('/practice/sets/{set}/start', [PracticeController::class, 'start'])->name('practice.start');
+    Route::get('/practice/sets/{set}/dictation', [PracticeController::class, 'dictation'])->name('practice.dictation');
+    Route::get('/practice/attempts/{attempt}', [PracticeController::class, 'show'])->name('practice.show');
+    Route::post('/practice/attempts/{attempt}/submit', [PracticeController::class, 'submit'])->name('practice.submit');
+    Route::get('/practice/attempts/{attempt}/result', [PracticeController::class, 'result'])->name('practice.result');
+    Route::post('/practice/questions/{question}/explain', [PracticeController::class, 'explain'])->name('practice.explain');
     Route::get('/practice/media/{path}', [PracticeMediaController::class, 'show'])
         ->where('path', '.*')->name('practice.media');
 

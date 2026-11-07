@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\PracticeAttempt;
 use App\Models\PracticeSet;
 use App\Models\Quiz;
 use App\Models\ReviewLog;
@@ -84,6 +85,14 @@ class PracticeIsolationTest extends TestCase
                 $svc->grade($attempt, collect($attempt->question_ids)->mapWithKeys(fn ($id) => [$id => 'B'])->all());
             }
         }
+        // and once more through the HTTP routes, result page and retry included
+        $set = PracticeSet::where('code', 'demo-reading')->first();
+        $this->actingAs($user)->post("/practice/sets/{$set->id}/start", ['mode' => 'mock']);
+        $http = PracticeAttempt::latest('id')->first();
+        $this->actingAs($user)->post("/practice/attempts/{$http->id}/submit", ['answers' => []]);
+        $this->actingAs($user)->get("/practice/attempts/{$http->id}/result")->assertOk();
+        $this->actingAs($user)->get('/practice')->assertOk();
+
         $retry = $svc->startRetry($user->id, 'reading');
         $this->assertNotNull($retry);
         $svc->grade($retry, []);
