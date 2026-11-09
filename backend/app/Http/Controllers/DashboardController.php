@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Quiz;
+use App\Models\QuizQuestion;
 use App\Models\ReviewLog;
 use App\Models\UserWord;
 use App\Services\CoreCoverageService;
@@ -43,13 +44,21 @@ class DashboardController extends Controller
             ->reverse()
             ->values();
 
-        // grammar weakness ranking (Part 5)
-        $grammarStats = ReviewLog::where('user_id', $userId)
-            ->whereNotNull('grammar_point')
-            ->select('grammar_point',
+        // grammar weakness ranking (Part 5), from the answers actually given.
+        // Not review_logs: boostGrammar() writes a quality-1 row for every
+        // point an AI review flags, indistinguishable from a wrong answer,
+        // which turned a 31% error rate into 97%. The adaptive selector keeps
+        // reading those rows on purpose; this ranking reports what happened.
+        $grammarStats = QuizQuestion::query()
+            ->join('quizzes', 'quizzes.id', '=', 'quiz_questions.quiz_id')
+            ->where('quizzes.user_id', $userId)
+            ->where('quizzes.status', 'completed')
+            ->whereNotNull('quiz_questions.grammar_point')
+            ->whereNotNull('quiz_questions.is_correct')
+            ->select('quiz_questions.grammar_point',
                 DB::raw('COUNT(*) as total'),
-                DB::raw('SUM(CASE WHEN quality < 3 THEN 1 ELSE 0 END) as wrong'))
-            ->groupBy('grammar_point')
+                DB::raw('SUM(CASE WHEN quiz_questions.is_correct THEN 0 ELSE 1 END) as wrong'))
+            ->groupBy('quiz_questions.grammar_point')
             ->get()
             ->map(fn ($r) => [
                 'point' => $r->grammar_point,

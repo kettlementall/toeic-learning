@@ -495,7 +495,12 @@ here reads or writes `quizzes`, `quiz_questions`, `user_words` or `review_logs`.
   offered as an optional flashcard drill, not as work owed.
 - **FR-30** Recent score trend (last 10 completed quizzes, chronological).
 - **FR-31** Grammar weakness ranking: per `grammar_point`, error rate =
-  `wrong/total` where wrong = `quality<3`, sorted desc.
+  `wrong/total` over the learner's answered Part 5 questions
+  (`quiz_questions.is_correct` in completed quizzes), sorted desc. Not from
+  `review_logs`: `boostGrammar()` (FR-28) writes quality-1 rows that cannot be
+  told from wrong answers and inflated the rates (31% read as 97%). The
+  adaptive selector (§4.3) still reads `review_logs`, boosts included, by
+  design.
 - **FR-32** Vocab weakness by part of speech (same error-rate computation).
 - **FR-33** Leech list (top 10 by `lapses`).
 - **FR-34** Latest AI-recommended grammar focus from recent reviews
