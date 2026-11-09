@@ -85,13 +85,14 @@ class QuizController extends Controller
         ]);
 
         foreach ($generated as $g) {
-            if (empty($g['question']) || empty($g['options'])) {
+            if (empty($g['question']) || empty($g['options']) || ! is_array($g['options'])) {
                 continue;
             }
-            [$options, $correct] = $this->shuffleOptions(
-                array_values($g['options']),
-                strtoupper((string) ($g['correct_answer'] ?? 'A')),
-            );
+            $answer = $this->answerIndex(array_values($g['options']), $g);
+            if ($answer === null) {
+                continue; // no trustworthy key: skip rather than mis-grade
+            }
+            [$options, $correct] = $this->shuffleOptions(array_values($g['options']), $answer);
             $quiz->questions()->create([
                 'word' => $g['word'] ?? null,
                 'grammar_point' => $g['grammar_point'] ?? null,
@@ -109,6 +110,11 @@ class QuizController extends Controller
 
         // fix total in case some were skipped
         $quiz->update(['total' => $quiz->questions()->count()]);
+        if ($quiz->total === 0) {
+            $quiz->delete();
+
+            return back()->with('error', 'AI quiz generation failed. Please try again later.');
+        }
 
         return redirect()->route('quiz.show', $quiz);
     }
@@ -179,13 +185,14 @@ class QuizController extends Controller
         ]);
 
         foreach ($questions as $g) {
-            if (empty($g['question']) || empty($g['options'])) {
+            if (empty($g['question']) || empty($g['options']) || ! is_array($g['options'])) {
                 continue;
             }
-            [$options, $correct] = $this->shuffleOptions(
-                array_values($g['options']),
-                strtoupper((string) ($g['correct_answer'] ?? 'A')),
-            );
+            $answer = $this->answerIndex(array_values($g['options']), $g);
+            if ($answer === null) {
+                continue; // no trustworthy key: skip rather than mis-grade
+            }
+            [$options, $correct] = $this->shuffleOptions(array_values($g['options']), $answer);
             $quiz->questions()->create([
                 'question' => $g['question'],
                 'options' => $options,
@@ -194,6 +201,11 @@ class QuizController extends Controller
             ]);
         }
         $quiz->update(['total' => $quiz->questions()->count()]);
+        if ($quiz->total === 0) {
+            $quiz->delete();
+
+            return back()->with('error', 'AI failed to generate questions for this article. Please try again.');
+        }
 
         $this->addNewsVocab($generated['vocab'] ?? []);
 
@@ -501,25 +513,56 @@ class QuizController extends Controller
     }
 
     /**
+     * Which option a generated question marks correct, or null when that
+     * cannot be trusted — the question is then dropped rather than graded
+     * against a wrong key.
+     *
+     * The model names the answer by its text (`answer`). It used to return a
+     * letter, and copied the prompt example's "A" while its own explanation
+     * argued for another option: a fifth of Part 5 keys contradicted their
+     * explanations, failing learners who answered correctly. A letter is
+     * still read when no `answer` is given.
+     */
+    private function answerIndex(array $options, array $g): ?int
+    {
+        $norm = fn ($s) => strtolower(rtrim(trim((string) $s), " .。"));
+        $texts = array_map($norm, $options);
+
+        if (count(array_unique($texts)) !== count($texts)) {
+            return null; // duplicate options: no single right one
+        }
+
+        if (array_key_exists('answer', $g)) {
+            $idx = array_search($norm($g['answer']), $texts, true);
+
+            return $idx === false ? null : $idx;
+        }
+
+        $letter = strtoupper(trim((string) ($g['correct_answer'] ?? '')));
+        $idx = strlen($letter) === 1 ? ord($letter) - 65 : -1;
+
+        return $idx >= 0 && $idx < count($options) ? $idx : null;
+    }
+
+    /**
      * Shuffle a question's options and remap the correct-answer letter, so the
-     * correct choice isn't biased toward a fixed position (LLMs tend to put it
-     * at "A"). Prompts are told to explain by option content, not letter, so
-     * explanations stay valid after the shuffle.
+     * correct choice isn't biased toward a fixed position. Prompts are told to
+     * explain by option content, not letter, so explanations stay valid after
+     * the shuffle.
      *
      * @param  string[]  $options  ordered option strings
-     * @param  string    $correct  original correct letter (A–D)
+     * @param  int       $correct  index of the correct option
      * @return array{0: string[], 1: string}  [shuffled options, new correct letter]
      */
-    private function shuffleOptions(array $options, string $correct): array
+    private function shuffleOptions(array $options, int $correct): array
     {
         $options = array_values($options);
-        $idx = ord($correct) - 65; // 'A' => 0
-        $correctText = $options[$idx] ?? ($options[0] ?? null);
+        $order = array_keys($options);
+        shuffle($order);
 
-        shuffle($options);
-
-        $newIdx = array_search($correctText, $options, true);
-
-        return [$options, chr(65 + ($newIdx === false ? 0 : $newIdx))];
+        return [
+            array_map(fn ($i) => $options[$i], $order),
+            chr(65 + array_search($correct, $order, true)),
+        ];
     }
 }

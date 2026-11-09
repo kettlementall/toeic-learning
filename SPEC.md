@@ -379,8 +379,21 @@ here reads or writes `quizzes`, `quiz_questions`, `user_words` or `review_logs`.
 - **FR-19** **Part 5**: `selectGrammarPoints()` chooses grammar codes
   (adaptive or specific, §4.3); Claude generates one question per code.
 - **FR-20** Persist a `Quiz` (`status=pending`) and its valid `QuizQuestion`s
-  (skipping any without `question`/`options`); `correct_answer` uppercased;
-  `total` corrected to the actual stored count. Each question's options are
+  (skipping any without `question`/`options`); `total` corrected to the
+  actual stored count, and a quiz left with no questions is deleted with an
+  error banner. **The key comes from the answer's text**: every generator
+  returns `answer`, the correct option written out, matched to an option
+  case- and trailing-punctuation-insensitively (`answerIndex`). A question
+  whose answer matches no option, or whose options repeat, is dropped rather
+  than graded against a guess. Generators used to return a letter, and copied
+  the prompt example's "A" while their own explanation argued for another
+  option — about a fifth of Part 5 keys contradicted their explanations,
+  failing learners who had answered correctly. A bare `correct_answer` letter
+  is still read when no `answer` is given. `php artisan quiz:verify-keys`
+  (`--type`, `--user-id`, `--dry-run`) repairs stored keys: it asks only which
+  option each explanation argues for, moves the key when that differs, and
+  re-grades the answer and quiz score (schedules and logs written at submit
+  are left alone — they cannot be traced to one question). Each question's options are
   **shuffled** at save and the correct letter remapped (`shuffleOptions`), so
   the answer isn't biased toward a fixed position (LLMs favor "A"); prompts
   therefore explain by option content, not letter. Applies to all generated

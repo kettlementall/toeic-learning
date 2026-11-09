@@ -637,6 +637,53 @@ PROMPT;
     }
 
     /**
+     * For stored questions, which option each explanation argues is correct —
+     * a reading task, not re-solving the question, so it can audit keys that
+     * were saved as the wrong letter while the explanation was right.
+     *
+     * @param  array  $items  [{id, question, options[], explanation}]
+     * @return array<int, ?string>  id => the option text the explanation
+     *                              supports, or null when it names none
+     */
+    public function explainedAnswers(array $items): array
+    {
+        if (! $this->hasKey() || empty($items)) {
+            return [];
+        }
+
+        $blocks = [];
+        foreach ($items as $i) {
+            $opts = implode(' | ', $i['options']);
+            $blocks[] = "[{$i['id']}] 題目：{$i['question']}\n選項：{$opts}\n解析：{$i['explanation']}";
+        }
+        $list = implode("\n\n", $blocks);
+
+        $prompt = <<<PROMPT
+以下每題附有選項與解析。請「只根據解析的內容」判斷解析認定的正確答案是哪一個選項，不要自己重新解題。
+回傳該選項的完整文字（必須與選項其中一項一字不差）；解析沒有明確指出正確答案時回傳 null。
+
+{$list}
+
+只回傳 JSON 物件，鍵為方括號中的編號，不要其他文字：
+{"123": "reach", "124": null}
+PROMPT;
+
+        for ($attempt = 0; $attempt < 3; $attempt++) {
+            $json = $this->callJson($prompt, 2048);
+            if (is_array($json) && $json) {
+                $out = [];
+                foreach ($json as $id => $answer) {
+                    $out[(int) $id] = is_string($answer) && trim($answer) !== '' ? trim($answer) : null;
+                }
+
+                return $out;
+            }
+        }
+
+        return [];
+    }
+
+    /**
      * Generate quiz questions.
      *
      * @param  array  $items  For vocab: list of words (strings). For part5: list of grammar_point strings.
@@ -711,7 +758,7 @@ JSON 格式如下：
   "suitability_note": "難度評語(繁體中文，2-3句)",
   "summary": "文章重點摘要(繁體中文，2-3句)",
   "questions": [
-    {"question":"英文題目", "options":["A選項","B選項","C選項","D選項"], "correct_answer":"A", "explanation":"繁體中文解析，以選項的內容文字說明，切勿使用 A/B/C/D 等選項代號(選項順序之後會被打亂)。否定事實題的解析必須逐一說明另外三項各自出現在文章的哪個部分，再說明答案那一項為何沒提到或與文章牴觸"}
+    {"question":"英文題目", "options":["A選項","B選項","C選項","D選項"], "answer":"正確選項的完整文字，必須與 options 其中一項一字不差", "explanation":"繁體中文解析，以選項的內容文字說明，切勿使用 A/B/C/D 等選項代號(選項順序之後會被打亂)。否定事實題的解析必須逐一說明另外三項各自出現在文章的哪個部分，再說明答案那一項為何沒提到或與文章牴觸"}
   ],
   "vocab": [
     {"word":"english", "part_of_speech":"noun/verb/adjective/adverb", "definition_zh":"繁體中文翻譯", "example":"一句英文例句", "mnemonic":"記憶小技巧(繁體中文，諧音/字根字首/拆字/聯想擇一，須與字義相關，30字內)"}
@@ -855,7 +902,7 @@ PROMPT;
 - 4 個選項必須是「四個不同的英文單字」，詞性相同、難度相近，只有一個符合句子語意。
 - 誘答選項須為意思不同的其他真實單字，不要用同一個字的不同詞形(如 -tion/-ing/-ly/-ed)當選項，以免變成詞性/文法題。
 只回傳 JSON 陣列，每題格式如下，不要其他文字：
-[{"word":"考的單字", "question":"含 ____ 的英文句子", "options":["A選項","B選項","C選項","D選項"], "correct_answer":"A", "explanation":"繁體中文解析，說明正解單字為何符合語意、其他三個單字語意為何不合，切勿使用 A/B/C/D 等選項代號(選項順序之後會被打亂)"}]
+[{"word":"考的單字", "question":"含 ____ 的英文句子", "options":["A選項","B選項","C選項","D選項"], "answer":"正確選項的完整文字，必須與 options 其中一項一字不差", "explanation":"繁體中文解析，說明正解單字為何符合語意、其他三個單字語意為何不合，切勿使用 A/B/C/D 等選項代號(選項順序之後會被打亂)"}]
 PROMPT;
     }
 
@@ -872,7 +919,7 @@ PROMPT;
 pronoun代名詞, relative關係詞, comparison比較級, agreement主謂一致, collocation慣用搭配, vocab_in_context語境詞彙。
 每題提供一個商務情境句子(空格用 ____ 表示)，4 個選項含合理誘答，只有一個正確。
 只回傳 JSON 陣列，每題格式如下，不要其他文字：
-[{"grammar_point":"對應的考點代碼", "question":"含 ____ 的英文句子", "options":["A","B","C","D"], "correct_answer":"A", "explanation":"繁體中文解析，以選項的內容文字說明文法規則與為何其他選項錯，切勿使用 A/B/C/D 等選項代號(選項順序之後會被打亂)"}]
+[{"grammar_point":"對應的考點代碼", "question":"含 ____ 的英文句子", "options":["A","B","C","D"], "answer":"正確選項的完整文字，必須與 options 其中一項一字不差", "explanation":"繁體中文解析，以選項的內容文字說明文法規則與為何其他選項錯，切勿使用 A/B/C/D 等選項代號(選項順序之後會被打亂)"}]
 PROMPT;
     }
 
@@ -886,7 +933,7 @@ PROMPT;
 {$list}
 
 共 {$n} 題。只回傳 JSON 陣列，格式如下，不要其他文字：
-[{"word":"考的單字", "question":"含 ____ 的英文句子", "options":["A","B","C","D"], "correct_answer":"A", "explanation":"繁體中文解析，以選項的內容文字說明，切勿使用 A/B/C/D 等選項代號(選項順序之後會被打亂)"}]
+[{"word":"考的單字", "question":"含 ____ 的英文句子", "options":["A","B","C","D"], "answer":"正確選項的完整文字，必須與 options 其中一項一字不差", "explanation":"繁體中文解析，以選項的內容文字說明，切勿使用 A/B/C/D 等選項代號(選項順序之後會被打亂)"}]
 PROMPT;
     }
 
