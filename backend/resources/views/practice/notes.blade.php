@@ -5,6 +5,7 @@
 <style>
     /* no typography plugin on the Tailwind CDN: just enough for handout notes */
     .note h2 { font-weight: 600; font-size: 1.125rem; margin: 1.5rem 0 .5rem; }
+    .note h2:first-child, .note p:first-child { margin-top: 0; }
     .note h3 { font-weight: 600; margin: 1.25rem 0 .4rem; }
     .note p { margin: .5rem 0; }
     .note ul, .note ol { margin: .4rem 0 .4rem 1.25rem; }
