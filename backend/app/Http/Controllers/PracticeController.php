@@ -7,6 +7,7 @@ use App\Models\PracticeAttempt;
 use App\Models\PracticeQuestion;
 use App\Models\PracticeSet;
 use App\Services\ClaudeService;
+use App\Services\PracticeNotes;
 use App\Services\PracticeService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -45,8 +46,12 @@ class PracticeController extends Controller
         $unfinished = PracticeAttempt::where('user_id', $userId)->where('status', 'in_progress')
             ->latest()->limit(5)->with('set')->get();
 
+        $notes = app(PracticeNotes::class);
+
         return view('practice.index', [
             'sets' => $sets,
+            'notes' => $notes->all(),
+            'noteFor' => $sets->mapWithKeys(fn ($s) => [$s->id => $notes->keyForSet($s)]),
             'progress' => $progress,
             'unfinished' => $unfinished,
             'wrong' => [

@@ -6,6 +6,7 @@ use App\Http\Controllers\Auth\RegisteredUserController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\PracticeController;
 use App\Http\Controllers\PracticeMediaController;
+use App\Http\Controllers\PracticeNotesController;
 use App\Http\Controllers\QuizController;
 use App\Http\Controllers\ReviewController;
 use App\Http\Controllers\VocabularyController;
@@ -67,6 +68,8 @@ Route::middleware('auth')->group(function () {
     Route::post('/practice/questions/{question}/explain', [PracticeController::class, 'explain'])->name('practice.explain');
     Route::get('/practice/media/{path}', [PracticeMediaController::class, 'show'])
         ->where('path', '.*')->name('practice.media');
+    Route::get('/practice/notes/{note}', [PracticeNotesController::class, 'show'])
+        ->where('note', '[a-z0-9-]+')->name('practice.notes');
 
     // ---------------------------------------------------------------------
     // Admin user management (admin-only)

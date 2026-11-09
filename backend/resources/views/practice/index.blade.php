@@ -54,6 +54,18 @@
         </div>
     @endif
 
+    @if ($notes->isNotEmpty())
+        <section class="mb-6">
+            <h2 class="font-semibold">Lecture notes</h2>
+            <p class="text-xs text-slate-500 mb-2">Strategies, rules and phrase lists from the handouts — worth a read before the matching exercises.</p>
+            <div class="bg-white rounded-xl border p-3 sm:px-4 flex flex-wrap gap-2 text-sm">
+                @foreach ($notes as $n)
+                    <a href="{{ route('practice.notes', $n['key']) }}" class="px-2.5 py-1 rounded-full border hover:bg-slate-50">{{ $n['title'] }}</a>
+                @endforeach
+            </div>
+        </section>
+    @endif
+
     @if ($sets->isEmpty())
         <div class="bg-white rounded-xl border p-6 text-sm text-slate-500">No practice sets imported yet. Run <code>php artisan practice:import</code>.</div>
     @endif
@@ -79,6 +91,9 @@
                                 @endif
                             </p>
                         </div>
+                        @if ($noteFor[$set->id])
+                            <a href="{{ route('practice.notes', $noteFor[$set->id]) }}" class="text-sm text-indigo-600 hover:underline">📖 Notes</a>
+                        @endif
                         @if ($section === 'dictation')
                             <a href="{{ route('practice.dictation', $set) }}" class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700">Open</a>
                         @else
