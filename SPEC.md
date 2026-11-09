@@ -523,6 +523,12 @@ here reads or writes `quizzes`, `quiz_questions`, `user_words` or `review_logs`.
     answers it is at most *low*. Under `min_total` answers, or with neither
     Part 5 nor Part 7 answered, no score is shown — the card names the quiz
     type that would help most instead.
+- **FR-34b** **Core vocabulary progress** (`CoreCoverageService`). How many of
+  the `toeic_core` words are in the learner's library, split into *well
+  learned* (active, `interval_days >= 21`) and *learning* (the rest, including
+  suspended cards), overall and in bands of 200 by `frequency_rank`; plus how
+  many library words are on the list. Lemma-matched, so a library "offers"
+  covers the list's "offer". Hidden when the list is empty.
 
 ### 3.8 Responsive UI
 - **FR-35** Top navigation shows inline links ≥768px and a collapsible

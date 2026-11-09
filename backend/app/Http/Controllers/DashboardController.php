@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Quiz;
 use App\Models\ReviewLog;
 use App\Models\UserWord;
+use App\Services\CoreCoverageService;
 use App\Services\QuizBuilderService;
 use App\Services\ScoreEstimateService;
 use App\Services\SpacedRepetitionService;
@@ -15,6 +16,7 @@ class DashboardController extends Controller
     public function __construct(
         private SpacedRepetitionService $srs,
         private ScoreEstimateService $estimator,
+        private CoreCoverageService $coverage,
     ) {
     }
 
@@ -100,11 +102,14 @@ class DashboardController extends Controller
         // rough Reading score from real quiz answers
         $scoreEstimate = $this->estimator->estimate($userId);
 
+        // progress through the curated TOEIC list
+        $coreCoverage = $this->coverage->forUser($userId);
+
         return view('dashboard', compact(
             'totalWords', 'dueCount', 'suspendedCount',
             'totalQuizzes', 'avgAccuracy',
             'recentQuizzes', 'grammarStats', 'posStats', 'leeches', 'aiGrammarFocus',
-            'scoreEstimate'
+            'scoreEstimate', 'coreCoverage'
         ));
     }
 

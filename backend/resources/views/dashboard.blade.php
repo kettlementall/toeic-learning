@@ -86,6 +86,49 @@
     </p>
 </div>
 
+{{-- progress through the curated TOEIC list --}}
+@php
+    $cov = $coreCoverage;
+    $known = $cov['learning'] + $cov['mature'];
+    $share = fn ($n, $of) => $of ? round($n / $of * 100) : 0;
+@endphp
+@if ($cov['total'])
+<div class="bg-white rounded-xl border p-5 mb-8">
+    <h2 class="font-semibold">📚 TOEIC Core Vocabulary</h2>
+    <div class="mt-2">
+        <span class="text-4xl font-bold text-emerald-600">{{ $known }}</span>
+        <span class="text-slate-400">/ {{ $cov['total'] }}</span>
+        <span class="text-sm text-slate-500 ml-2">{{ $share($known, $cov['total']) }}% of the list is in your library</span>
+    </div>
+    <p class="text-sm text-slate-500 mt-1">
+        {{ $cov['mature'] }} well learned (reviewed at intervals of {{ \App\Services\CoreCoverageService::MATURE_DAYS }}+ days) ·
+        {{ $cov['in_core'] }} of your {{ $cov['library'] }} words are on the list
+    </p>
+
+    <div class="mt-4 space-y-2">
+        @foreach ($cov['bands'] as $b)
+            @php $bandKnown = $b['learning'] + $b['mature']; @endphp
+            <div class="flex items-center gap-3 text-sm">
+                <span class="w-24 shrink-0 text-slate-500 tabular-nums">#{{ $b['from'] }}–{{ $b['to'] }}</span>
+                <div class="flex-1 h-3 bg-slate-100 rounded-full overflow-hidden flex"
+                     title="{{ $b['mature'] }} well learned, {{ $b['learning'] }} learning, {{ $b['total'] - $bandKnown }} not yet met">
+                    <div class="h-full bg-emerald-600" style="width: {{ $share($b['mature'], $b['total']) }}%"></div>
+                    <div class="h-full bg-emerald-300" style="width: {{ $share($b['learning'], $b['total']) }}%"></div>
+                </div>
+                <span class="w-16 shrink-0 text-right text-slate-600 tabular-nums">{{ $bandKnown }}/{{ $b['total'] }}</span>
+            </div>
+        @endforeach
+    </div>
+
+    <div class="flex flex-wrap gap-4 mt-3 text-xs text-slate-500">
+        <span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded-sm bg-emerald-600"></span>Well learned</span>
+        <span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded-sm bg-emerald-300"></span>Learning</span>
+        <span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded-sm bg-slate-100 border"></span>Not yet met</span>
+    </div>
+    <p class="text-xs text-slate-400 mt-2">Ranked by how often TOEIC tests a word — lower numbers are more common. New quiz words are drawn from this list in rank order.</p>
+</div>
+@endif
+
 <div class="flex flex-wrap gap-3 mb-8">
     <a href="{{ route('words.index') }}" class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700">🔍 Look Up Words</a>
     <a href="{{ route('quiz.create') }}" class="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700">📝 Take a Quiz</a>
