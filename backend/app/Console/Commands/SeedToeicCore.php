@@ -22,6 +22,19 @@ class SeedToeicCore extends Command
      * genuine vocabulary — "outbound-based", "restock-able", "remittance-based".
      * Real hyphenated TOEIC words ("round-trip", "co-worker") still pass.
      */
+    /**
+     * A collocation or pattern entered by hand from the course handouts —
+     * "comply with", "be exposed to", "warn sb to do", "so ... that". The
+     * model never seeds these, so they are not held to the single-word rule.
+     */
+    public static function looksLikeAPhrase(string $entry): bool
+    {
+        $tokens = preg_split('/\s+/', trim($entry));
+
+        return count($tokens) >= 2 && count($tokens) <= 6
+            && collect($tokens)->every(fn ($t) => preg_match("/^([a-z]+([-'][a-z]+)?|\.\.\.)$/", $t));
+    }
+
     public static function looksLikeAWord(string $word): bool
     {
         if (! preg_match('/^[a-z]+(-[a-z]+)?$/', $word)) {

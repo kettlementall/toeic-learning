@@ -53,7 +53,7 @@ class AuditToeicCore extends Command
 
         // 1. cheap pass: entries that are not even well-formed words
         $malformed = Word::toeicCore()->get(['id', 'word'])
-            ->reject(fn ($w) => SeedToeicCore::looksLikeAWord($w->word))
+            ->reject(fn ($w) => SeedToeicCore::looksLikeAWord($w->word) || SeedToeicCore::looksLikeAPhrase($w->word))
             ->values();
 
         $this->line("Malformed / fabricated entries: {$malformed->count()}");
@@ -64,11 +64,15 @@ class AuditToeicCore extends Command
             }
         }
 
-        // 2. model pass: is each survivor genuinely TOEIC vocabulary?
+        // 2. model pass: is each survivor genuinely TOEIC vocabulary? Phrases
+        // were entered by hand from the course handouts, not seeded by the
+        // model, so they are not second-guessed here.
         $fromRank = (int) $this->option('from-rank');
         $candidates = Word::toeicCore()
             ->where('frequency_rank', '>=', $fromRank)
-            ->get(['id', 'word', 'frequency_rank']);
+            ->get(['id', 'word', 'frequency_rank'])
+            ->reject(fn ($w) => SeedToeicCore::looksLikeAPhrase($w->word))
+            ->values();
 
         $scope = $fromRank > 1 ? " (rank {$fromRank}+)" : '';
         $this->line("Verifying {$candidates->count()} remaining entries{$scope}…");
