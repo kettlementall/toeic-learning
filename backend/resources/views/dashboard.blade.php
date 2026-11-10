@@ -91,21 +91,35 @@
     $cov = $coreCoverage;
     $known = $cov['learning'] + $cov['mature'];
     $share = fn ($n, $of) => $of ? round($n / $of * 100) : 0;
+    $goal = $cov['milestone'];
 @endphp
-@if ($cov['total'])
+@if ($cov['total'] && $goal)
 <div class="bg-white rounded-xl border p-5 mb-8">
     <h2 class="font-semibold">📚 TOEIC Core Vocabulary</h2>
-    <div class="mt-2">
-        <span class="text-4xl font-bold text-emerald-600">{{ $known }}</span>
-        <span class="text-slate-400">/ {{ $cov['total'] }}</span>
-        <span class="text-sm text-slate-500 ml-2">{{ $share($known, $cov['total']) }}% of the list is in your library</span>
+
+    {{-- the next milestone, not the whole list: the list is a queue, not a to-do --}}
+    <p class="text-sm text-slate-500 mt-2">Current goal: the {{ $goal['upto'] }} most-tested entries</p>
+    <div class="mt-1">
+        <span class="text-4xl font-bold text-emerald-600">{{ $goal['known'] }}</span>
+        <span class="text-slate-400">/ {{ $goal['total'] }}</span>
+        <span class="text-sm text-slate-500 ml-2">{{ $share($goal['known'], $goal['total']) }}% · {{ max(0, (int) ceil($goal['total'] * \App\Services\CoreCoverageService::MILESTONE_DONE) - $goal['known']) }} more to complete this goal</span>
     </div>
-    <p class="text-sm text-slate-500 mt-1">
-        {{ $cov['mature'] }} well learned (reviewed at intervals of {{ \App\Services\CoreCoverageService::MATURE_DAYS }}+ days) ·
-        {{ $cov['in_core'] }} of your {{ $cov['library'] }} words are on the list
+    <div class="mt-3 h-3 bg-slate-100 rounded-full overflow-hidden flex"
+         title="{{ $goal['mature'] }} well learned, {{ $goal['known'] - $goal['mature'] }} learning, {{ $goal['total'] - $goal['known'] }} not yet met">
+        <div class="h-full bg-emerald-600" style="width: {{ $share($goal['mature'], $goal['total']) }}%"></div>
+        <div class="h-full bg-emerald-300" style="width: {{ $share($goal['known'] - $goal['mature'], $goal['total']) }}%"></div>
+    </div>
+    <p class="text-xs text-slate-400 mt-2">
+        {{ $goal['mature'] }} of them well learned (reviewed at intervals of {{ \App\Services\CoreCoverageService::MATURE_DAYS }}+ days).
+        The goal moves on once {{ (int) (\App\Services\CoreCoverageService::MILESTONE_DONE * 100) }}% are in your library.
     </p>
 
-    <div class="mt-4 space-y-2">
+    <details class="mt-4 text-sm">
+        <summary class="cursor-pointer text-slate-500 hover:text-slate-700">
+            Whole list: {{ $known }} / {{ $cov['total'] }} · {{ $cov['in_core'] }} of your {{ $cov['library'] }} words are on it
+        </summary>
+
+    <div class="mt-3 space-y-2">
         @foreach ($cov['bands'] as $b)
             @php $bandKnown = $b['learning'] + $b['mature']; @endphp
             <div class="flex items-center gap-3 text-sm">
@@ -126,6 +140,7 @@
         <span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded-sm bg-slate-100 border"></span>Not yet met</span>
     </div>
     <p class="text-xs text-slate-400 mt-2">Ranked by how often TOEIC tests a word — lower numbers are more common. New quiz words are drawn from this list in rank order.</p>
+    </details>
 </div>
 @endif
 

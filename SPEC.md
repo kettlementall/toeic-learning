@@ -547,6 +547,11 @@ here reads or writes `quizzes`, `quiz_questions`, `user_words` or `review_logs`.
   suspended cards), overall and in bands of 200 by `frequency_rank`; plus how
   many library words are on the list. Lemma-matched, so a library "offers"
   covers the list's "offer". Hidden when the list is empty.
+  The card leads with a **milestone**, not the whole list (two thousand
+  entries reads as a to-do that never ends): the top N ranks, N a multiple of
+  200, for the first N less than 90% in the library (`MILESTONE_DONE`); past
+  the end it is the whole list. The full list and its bands sit in a
+  collapsed section below.
 
 ### 3.8 Responsive UI
 - **FR-35** Top navigation shows inline links ≥768px and a collapsible
@@ -604,6 +609,15 @@ series and the W1–W5 lecture reviews), sat as many times as the learner likes.
 - **FR-45** **Media** (`GET /practice/media/{path}`) streams audio/images under
   the practice root to signed-in users via `BinaryFileResponse` (Range → 206);
   `realpath` containment blocks traversal; only mp3/png/jpg are served.
+- **FR-45a** **Handout notes** (`GET /practice/notes/{note}`,
+  `PracticeNotes`): strategies, rules and phrase tables distilled from the
+  handouts, one markdown file per week and part (`w3-part5.md`) plus
+  `zhuifen-grammar.md`, read from `notes/` under the practice root — out of
+  git, signed-in users only, no import step. Keys are `[a-z0-9-]+` and must
+  name an existing `.md`. Rendered with `Str::markdown`, raw HTML stripped.
+  `/practice` lists them, and each set links the note for its week and part
+  (mock tests → the grammar notes). Items marked † were blanks in the student
+  handout, filled from context.
 
 ---
 
@@ -698,6 +712,11 @@ that interval on a false result.
   whose output is filtered against owned words by `App\Support\Lemma` (strips
   inflections only, so `offers`/`offer` collide while `investment`/`invest` stay
   separate) and persisted with `source=api`.
+  The list also carries entries added by hand: words that real test text uses
+  but the list lacked, and the handouts' words and **phrases** ("comply with",
+  "be exposed to"), interleaved with the generated ranks. `words:audit-toeic`
+  accepts phrases (`SeedToeicCore::looksLikeAPhrase`) and never sends them to
+  the model check, since the model never seeds them.
 - **`custom`**: random `n` from a scope — `custom` (user library, optional tag
   filter), `builtin` (seed words), or any word — filtered by category/level.
 

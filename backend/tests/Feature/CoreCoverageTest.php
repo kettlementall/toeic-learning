@@ -54,6 +54,31 @@ class CoreCoverageTest extends TestCase
         ], $cov['bands']);
     }
 
+    public function test_the_goal_is_the_first_round_milestone_not_yet_mostly_learned(): void
+    {
+        $user = User::factory()->create();
+        // ranks 1-10 in the library, 201-210 half of it, 401-405 untouched
+        foreach (range(1, 10) as $r) { $this->core("a{$r}", $r); $this->own($user, "a{$r}", ['interval_days' => $r <= 4 ? 30 : 2]); }
+        foreach (range(201, 210) as $r) { $this->core("b{$r}", $r); if ($r <= 205) $this->own($user, "b{$r}"); }
+        foreach (range(401, 405) as $r) { $this->core("c{$r}", $r); }
+
+        $goal = app(CoreCoverageService::class)->forUser($user->id)['milestone'];
+
+        // the top 200 are done (10/10), the top 400 are not (15/20)
+        $this->assertSame(['upto' => 400, 'total' => 20, 'known' => 15, 'mature' => 4], $goal);
+    }
+
+    public function test_the_last_goal_is_the_whole_list_by_its_real_last_rank(): void
+    {
+        $user = User::factory()->create();
+        foreach (range(1, 3) as $r) { $this->core("a{$r}", $r); $this->own($user, "a{$r}"); }
+        foreach (range(201, 203) as $r) { $this->core("b{$r}", $r); $this->own($user, "b{$r}"); }
+
+        $goal = app(CoreCoverageService::class)->forUser($user->id)['milestone'];
+
+        $this->assertSame(['upto' => 203, 'total' => 6, 'known' => 6, 'mature' => 0], $goal);
+    }
+
     public function test_dashboard_shows_core_progress(): void
     {
         $user = User::factory()->create();
@@ -64,6 +89,7 @@ class CoreCoverageTest extends TestCase
         $this->actingAs($user)->get('/')
             ->assertOk()
             ->assertSee('TOEIC Core Vocabulary')
+            ->assertSee('Current goal: the 2 most-tested entries')
             ->assertSee('#1–2')
             ->assertSee('1/2');
     }
