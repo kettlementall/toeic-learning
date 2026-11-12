@@ -107,8 +107,15 @@
                                 </div>
                             @endforeach
                         </div>
-                        @if ($q->explanation)
-                            <div class="mt-2 text-sm text-slate-600 bg-slate-50 rounded-lg p-3">💡 {{ $q->explanation }}</div>
+                        @if ($q->explanation || ($hasKey ?? false))
+                            <div class="mt-2" x-data="quizExplainer({{ $q->id }}, @js($q->explanation))">
+                                <button type="button" x-show="!text" @click="load()" :disabled="loading"
+                                        class="text-xs px-2.5 py-1 rounded-md border {{ $q->is_correct ? 'border-slate-200 text-slate-500' : 'border-indigo-300 text-indigo-700' }} hover:bg-indigo-50 disabled:opacity-50">
+                                    <span x-show="!loading">✨ AI 解說</span><span x-show="loading" x-cloak>產生中…</span>
+                                </button>
+                                <p x-show="error" x-cloak x-text="error" class="text-xs text-rose-600 mt-1"></p>
+                                <div x-show="text" x-cloak class="text-sm whitespace-pre-line text-slate-600 bg-slate-50 rounded-lg p-3 leading-relaxed">💡 <span x-text="text"></span></div>
+                            </div>
                         @endif
                     </div>
                 </div>
@@ -122,4 +129,28 @@
         <a href="{{ route('dashboard') }}" class="px-4 py-2 bg-slate-200 rounded-lg text-sm">Back to Dashboard</a>
     </div>
 </div>
+
+<script>
+    function quizExplainer(id, cached) {
+        return {
+            text: cached, loading: false, error: null,
+            async load() {
+                this.loading = true; this.error = null;
+                try {
+                    const res = await fetch(`{{ url('/quiz/' . $quiz->id . '/questions') }}/${id}/explain`, {
+                        method: 'POST',
+                        headers: { 'X-CSRF-TOKEN': document.querySelector('meta[name=csrf-token]').content, 'Accept': 'application/json' },
+                    });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.error || 'Request failed');
+                    this.text = data.explanation;
+                } catch (e) {
+                    this.error = e.message;
+                } finally {
+                    this.loading = false;
+                }
+            },
+        };
+    }
+</script>
 @endsection

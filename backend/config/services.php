@@ -60,6 +60,11 @@ return [
                 'model' => env('ANTHROPIC_MODEL_QUIZ', 'claude-sonnet-5-5'),
                 'effort' => env('ANTHROPIC_EFFORT_QUIZ', 'medium'),
             ],
+            // one question's explanation, written when the learner asks
+            'quiz_explain' => [
+                'model' => env('ANTHROPIC_MODEL_QUIZ', 'claude-sonnet-5-5'),
+                'effort' => env('ANTHROPIC_EFFORT_EXPLAIN', 'low'),
+            ],
             'quiz_review' => [
                 'model' => env('ANTHROPIC_MODEL_REVIEW', 'claude-haiku-5-5'),
                 'effort' => env('ANTHROPIC_EFFORT_REVIEW', 'low'),

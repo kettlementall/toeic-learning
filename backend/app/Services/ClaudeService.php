@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\PracticeQuestion;
 use App\Models\Quiz;
+use App\Models\QuizQuestion;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -759,7 +760,7 @@ JSON 格式如下：
   "suitability_note": "難度評語(繁體中文，2-3句)",
   "summary": "文章重點摘要(繁體中文，2-3句)",
   "questions": [
-    {"question":"英文題目", "options":["A選項","B選項","C選項","D選項"], "answer":"正確選項的完整文字，必須與 options 其中一項一字不差", "explanation":"繁體中文解析，以選項的內容文字說明，切勿使用 A/B/C/D 等選項代號(選項順序之後會被打亂)。否定事實題的解析必須逐一說明另外三項各自出現在文章的哪個部分，再說明答案那一項為何沒提到或與文章牴觸"}
+    {"question":"英文題目", "options":["A選項","B選項","C選項","D選項"], "answer":"正確選項的完整文字，必須與 options 其中一項一字不差"}
   ],
   "vocab": [
     {"word":"english", "part_of_speech":"noun/verb/adjective/adverb", "definition_zh":"繁體中文翻譯", "example":"一句英文例句", "mnemonic":"記憶小技巧(繁體中文，諧音/字根字首/拆字/聯想擇一，須與字義相關，30字內)"}
@@ -903,7 +904,7 @@ PROMPT;
 - 4 個選項必須是「四個不同的英文單字」，詞性相同、難度相近，只有一個符合句子語意。
 - 誘答選項須為意思不同的其他真實單字，不要用同一個字的不同詞形(如 -tion/-ing/-ly/-ed)當選項，以免變成詞性/文法題。
 只回傳 JSON 陣列，每題格式如下，不要其他文字：
-[{"word":"考的單字", "question":"含 ____ 的英文句子", "options":["A選項","B選項","C選項","D選項"], "answer":"正確選項的完整文字，必須與 options 其中一項一字不差", "explanation":"繁體中文解析，說明正解單字為何符合語意、其他三個單字語意為何不合，切勿使用 A/B/C/D 等選項代號(選項順序之後會被打亂)"}]
+[{"word":"考的單字", "question":"含 ____ 的英文句子", "options":["A選項","B選項","C選項","D選項"], "answer":"正確選項的完整文字，必須與 options 其中一項一字不差"}]
 PROMPT;
     }
 
@@ -920,7 +921,7 @@ PROMPT;
 pronoun代名詞, relative關係詞, comparison比較級, agreement主謂一致, collocation慣用搭配, vocab_in_context語境詞彙。
 每題提供一個商務情境句子(空格用 ____ 表示)，4 個選項含合理誘答，只有一個正確。
 只回傳 JSON 陣列，每題格式如下，不要其他文字：
-[{"grammar_point":"對應的考點代碼", "question":"含 ____ 的英文句子", "options":["A","B","C","D"], "answer":"正確選項的完整文字，必須與 options 其中一項一字不差", "explanation":"繁體中文解析，以選項的內容文字說明文法規則與為何其他選項錯，切勿使用 A/B/C/D 等選項代號(選項順序之後會被打亂)"}]
+[{"grammar_point":"對應的考點代碼", "question":"含 ____ 的英文句子", "options":["A","B","C","D"], "answer":"正確選項的完整文字，必須與 options 其中一項一字不差"}]
 PROMPT;
     }
 
@@ -934,7 +935,7 @@ PROMPT;
 {$list}
 
 共 {$n} 題。只回傳 JSON 陣列，格式如下，不要其他文字：
-[{"word":"考的單字", "question":"含 ____ 的英文句子", "options":["A","B","C","D"], "answer":"正確選項的完整文字，必須與 options 其中一項一字不差", "explanation":"繁體中文解析，以選項的內容文字說明，切勿使用 A/B/C/D 等選項代號(選項順序之後會被打亂)"}]
+[{"word":"考的單字", "question":"含 ____ 的英文句子", "options":["A","B","C","D"], "answer":"正確選項的完整文字，必須與 options 其中一項一字不差"}]
 PROMPT;
     }
 
@@ -974,6 +975,55 @@ PROMPT;
 
         for ($attempt = 0; $attempt < 2; $attempt++) {
             $json = $this->callJson($prompt, 1200, 'practice_explain');
+            $text = is_array($json) ? trim((string) ($json['explanation'] ?? '')) : '';
+            if ($text !== '') {
+                return $text;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Explain one answered quiz question on request, in Traditional Chinese.
+     * Generated questions no longer carry an explanation (most were never
+     * read), so this is written only when the learner asks. The options are
+     * stored in their final, shuffled order, so letters are safe to cite, and
+     * the learner's own wrong choice gets its own sentence. News questions
+     * carry the article, since the answer depends on it.
+     */
+    public function explainQuizQuestion(QuizQuestion $q): ?string
+    {
+        if (! $this->hasKey()) {
+            return null;
+        }
+
+        $options = collect($q->options)->map(fn ($o, $i) => '(' . chr(65 + $i) . ') ' . $o)->implode("\n");
+        $passage = trim((string) ($q->quiz?->article['passage'] ?? ''));
+        $context = $passage !== '' ? "\n文章：\n{$passage}\n" : '';
+        $focus = $q->word ? "考的單字：{$q->word}\n" : ($q->grammar_point ? "考點：{$q->grammar_point}\n" : '');
+
+        $wrong = $q->user_answer && $q->user_answer !== $q->correct_answer;
+        $answerLine = $q->user_answer
+            ? "學生選了 ({$q->user_answer})" . ($wrong ? '，答錯了。' : '，答對了。')
+            : '學生沒有作答。';
+        $ask = $wrong
+            ? "先說明為什麼 ({$q->correct_answer}) 正確，再具體說明學生選的 ({$q->user_answer}) 錯在哪裡、為何容易誤選，最後一句帶過其他選項。"
+            : "先說明為什麼 ({$q->correct_answer}) 正確，再逐一簡短說明其他選項為什麼錯。";
+
+        $prompt = <<<PROMPT
+你是多益(TOEIC)老師。請用繁體中文為下面這題寫一段給學生看的解說，只回傳 JSON：{"explanation": "..."}
+{$context}
+{$focus}題目：{$q->question}
+{$options}
+正確答案：({$q->correct_answer})
+{$answerLine}
+
+解說要求：{$ask}指出關鍵字、文法規則或上下文線索，必要時附上關鍵句的中譯。條列清楚，200 字以內，不要重複題目全文。
+PROMPT;
+
+        for ($attempt = 0; $attempt < 2; $attempt++) {
+            $json = $this->callJson($prompt, 8000, 'quiz_explain');
             $text = is_array($json) ? trim((string) ($json['explanation'] ?? '')) : '';
             if ($text !== '') {
                 return $text;

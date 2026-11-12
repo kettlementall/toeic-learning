@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Quiz;
+use App\Models\QuizQuestion;
 use App\Models\ReviewLog;
 use App\Models\UserWord;
 use App\Models\Word;
@@ -283,6 +284,29 @@ class QuizController extends Controller
             'quiz' => $quiz,
             'hasKey' => $this->claude->hasKey(),
         ]);
+    }
+
+    /** Generate (once) and return the explanation for one answered question. */
+    public function explain(Quiz $quiz, QuizQuestion $question)
+    {
+        $this->authorizeOwner($quiz);
+        abort_if($quiz->status !== 'completed', 403);
+
+        if ($question->explanation) {
+            return response()->json(['explanation' => $question->explanation]);
+        }
+        if (! $this->claude->hasKey()) {
+            return response()->json(['error' => 'AI explanations are unavailable (no API key).'], 503);
+        }
+
+        $text = $this->claude->explainQuizQuestion($question->setRelation('quiz', $quiz));
+        if (! $text) {
+            return response()->json(['error' => 'Could not generate an explanation. Please try again.'], 502);
+        }
+
+        $question->update(['explanation' => $text]);
+
+        return response()->json(['explanation' => $text]);
     }
 
     /** Generate the AI review on request, once per quiz. */

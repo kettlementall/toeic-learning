@@ -99,6 +99,55 @@ class AiCostControlsTest extends TestCase
         $this->assertSame('examples', DB::table('ai_usages')->value('purpose'));
     }
 
+    public function test_generation_prompts_do_not_ask_for_explanations(): void
+    {
+        Http::fake(['api.anthropic.com/*' => Http::response(['content' => [['type' => 'text', 'text' => '[]']]], 200)]);
+
+        $claude = app(ClaudeService::class);
+        foreach (['vocab_mc', 'fill_blank', 'part5_grammar'] as $type) {
+            $claude->generateQuiz(['budget'], $type);
+        }
+
+        Http::assertSentCount(3);
+        Http::assertSent(fn (Request $r) => ! str_contains($r['messages'][0]['content'], 'explanation'));
+    }
+
+    public function test_a_question_is_explained_on_request_once(): void
+    {
+        config(['services.anthropic.tasks.quiz_explain' => ['model' => 'claude-sonnet-5-5', 'effort' => 'low']]);
+        Http::fake(['api.anthropic.com/*' => Http::response([
+            'content' => [['type' => 'text', 'text' => '{"explanation": "budget 是預算。你選的 b 不合語意。"}']],
+            'usage' => ['input_tokens' => 200, 'output_tokens' => 80],
+        ], 200)]);
+        $user = User::factory()->create();
+        $quiz = $this->completedQuiz($user);
+        $question = $quiz->questions()->first();
+
+        $this->actingAs($user)->get(route('quiz.review', $quiz))->assertSee('AI 解說');
+
+        $url = route('quiz.explain', [$quiz, $question]);
+        $this->postJson($url)->assertOk()->assertJson(['explanation' => 'budget 是預算。你選的 b 不合語意。']);
+        $this->postJson($url)->assertOk(); // second request is served from the saved text
+
+        Http::assertSentCount(1);
+        Http::assertSent(fn (Request $r) => $r['model'] === 'claude-sonnet-5-5'
+            && str_contains($r['messages'][0]['content'], '學生選了 (B)，答錯了'));
+        $this->assertSame('budget 是預算。你選的 b 不合語意。', $question->fresh()->explanation);
+        $this->assertSame('quiz_explain', DB::table('ai_usages')->value('purpose'));
+    }
+
+    public function test_another_learners_question_cannot_be_explained(): void
+    {
+        Http::fake();
+        $quiz = $this->completedQuiz(User::factory()->create());
+
+        $this->actingAs(User::factory()->create())
+            ->postJson(route('quiz.explain', [$quiz, $quiz->questions()->first()]))
+            ->assertForbidden();
+
+        Http::assertNothingSent();
+    }
+
     public function test_ai_usage_command_reports_cost(): void
     {
         DB::table('ai_usages')->insert([
