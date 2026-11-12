@@ -22,6 +22,33 @@
             @if (!empty($review['weaknesses']))
                 <p class="text-red-600 mt-1">Weaknesses: {{ $review['weaknesses'] }}</p>
             @endif
+            @if (empty($review))
+                @php
+                    $missed = $quiz->questions->where('is_correct', false);
+                    $missedTopics = $missed->map(fn ($q) => $q->word ?: $q->grammar_point)->filter()->unique()->values();
+                @endphp
+                @if ($missed->isEmpty())
+                    <p class="text-emerald-700">All correct — nice work.</p>
+                @else
+                    <p class="text-slate-700">Missed {{ $missed->count() }} of {{ $quiz->total }}@if ($missedTopics->isNotEmpty()): {{ $missedTopics->implode(', ') }}@endif</p>
+                    @if ($quiz->type === 'part5_grammar')
+                        <p class="text-xs text-slate-500 mt-1">Missed grammar points will come up more often in adaptive quizzes.</p>
+                    @elseif ($quiz->type !== 'news_reading')
+                        <p class="text-xs text-slate-500 mt-1">Missed words are already back in your review queue.</p>
+                    @endif
+                @endif
+                @if ($hasKey ?? false)
+                    <form method="POST" action="{{ route('quiz.ai-review', $quiz) }}" class="mt-3"
+                          x-data="{ busy: false }" @submit="busy = true">
+                        @csrf
+                        <button type="submit" :disabled="busy"
+                                class="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs disabled:opacity-60">
+                            <span x-show="!busy">✨ Get AI analysis</span>
+                            <span x-show="busy" x-cloak>Analyzing…</span>
+                        </button>
+                    </form>
+                @endif
+            @endif
         </div>
     </div>
 

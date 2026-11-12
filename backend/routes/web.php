@@ -56,6 +56,7 @@ Route::middleware('auth')->group(function () {
     Route::get('/quiz/{quiz}', [QuizController::class, 'show'])->name('quiz.show');
     Route::post('/quiz/{quiz}/submit', [QuizController::class, 'submit'])->name('quiz.submit');
     Route::get('/quiz/{quiz}/review', [QuizController::class, 'review'])->name('quiz.review');
+    Route::post('/quiz/{quiz}/ai-review', [QuizController::class, 'aiReview'])->name('quiz.ai-review');
 
     // Real-test practice bank (fixed course questions; separate from quizzes)
     Route::get('/practice', [PracticeController::class, 'index'])->name('practice.index');

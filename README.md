@@ -177,7 +177,9 @@ Set these in `backend/.env`:
 | Variable             | Purpose                                            | Default                                              |
 |----------------------|----------------------------------------------------|------------------------------------------------------|
 | `ANTHROPIC_API_KEY`  | Anthropic Claude API key. **Required** for word enrichment, quiz generation, and AI review. | *(none)* |
-| `ANTHROPIC_MODEL`    | Claude model ID.                                   | `claude-sonnet-4-6`                                  |
+| `ANTHROPIC_MODEL`    | Claude model for every call not listed below.      | `claude-sonnet-4-6`                                  |
+| `ANTHROPIC_MODEL_QUIZ` / `ANTHROPIC_EFFORT_QUIZ` | Model and effort for quiz generation (vocab, Part 5, fill-in, news). | `claude-sonnet-5-5` / `medium` |
+| `ANTHROPIC_MODEL_REVIEW` / `ANTHROPIC_EFFORT_REVIEW` | Model and effort for the on-request AI quiz review. | `claude-haiku-5-5` / `low` |
 | `DICTIONARY_API_URL` | Base URL for the dictionary lookups.               | `https://api.dictionaryapi.dev/api/v2/entries/en`    |
 | `DB_*`               | Database connection.                               | MySQL (Docker) / SQLite (local)                      |
 

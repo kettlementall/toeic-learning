@@ -50,7 +50,8 @@ class AiReviewIntakeTest extends TestCase
             '*' => Http::response([], 404),
         ]);
 
-        $this->actingAs($user)->get("/quiz/{$quiz->id}/review")->assertOk();
+        $this->actingAs($user)->post("/quiz/{$quiz->id}/ai-review")
+            ->assertRedirect(route('quiz.review', $quiz));
 
         $owned = UserWord::where('user_id', $user->id)->pluck('source', 'word');
         $this->assertSame('ai_review', $owned['revenue'] ?? null, 'core word joins the library');

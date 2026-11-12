@@ -268,14 +268,35 @@ class QuizController extends Controller
         return redirect()->route('quiz.review', $quiz);
     }
 
+    /**
+     * The results page. It makes no AI call: wrong answers were already fed to
+     * the SM-2 schedule and the grammar stats at submit, so the AI write-up is
+     * an extra the learner asks for (aiReview), not a cost on every quiz.
+     */
     public function review(Quiz $quiz)
     {
         $this->authorizeOwner($quiz);
 
         $quiz->load('questions');
 
-        // generate AI review once
-        if (empty($quiz->ai_review)) {
+        return view('quiz.review', [
+            'quiz' => $quiz,
+            'hasKey' => $this->claude->hasKey(),
+        ]);
+    }
+
+    /** Generate the AI review on request, once per quiz. */
+    public function aiReview(Quiz $quiz)
+    {
+        $this->authorizeOwner($quiz);
+
+        if ($quiz->status !== 'completed') {
+            return redirect()->route('quiz.show', $quiz);
+        }
+
+        $quiz->load('questions');
+
+        if (empty($quiz->ai_review) && $this->claude->hasKey()) {
             $review = $this->claude->reviewQuiz($quiz);
             $quiz->update(['ai_review' => $review]);
 
@@ -323,7 +344,7 @@ class QuizController extends Controller
             $this->boostGrammar($quiz, $review['review_grammar'] ?? []);
         }
 
-        return view('quiz.review', compact('quiz'));
+        return redirect()->route('quiz.review', $quiz);
     }
 
     /**

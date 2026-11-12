@@ -37,9 +37,45 @@ return [
 
     'anthropic' => [
         'api_key' => env('ANTHROPIC_API_KEY'),
+        // used by every call whose purpose is not listed under 'tasks'
         'model' => env('ANTHROPIC_MODEL', 'claude-sonnet-4-6'),
         'base_url' => 'https://api.anthropic.com/v1/messages',
         'version' => '2023-06-01',
+
+        // Per-purpose model and effort (the purpose names are the third
+        // argument to ClaudeService::callJson). Quiz generation is templated
+        // JSON work that does not need the top model; the post-quiz review is
+        // a short summary and runs on the smallest one. Effort is only sent
+        // when set, so leave it empty for models that do not accept it.
+        'tasks' => [
+            'quiz' => [
+                'model' => env('ANTHROPIC_MODEL_QUIZ', 'claude-sonnet-5-5'),
+                'effort' => env('ANTHROPIC_EFFORT_QUIZ', 'medium'),
+            ],
+            'quiz_news' => [
+                'model' => env('ANTHROPIC_MODEL_QUIZ', 'claude-sonnet-5-5'),
+                'effort' => env('ANTHROPIC_EFFORT_QUIZ', 'medium'),
+            ],
+            'quiz_new_words' => [
+                'model' => env('ANTHROPIC_MODEL_QUIZ', 'claude-sonnet-5-5'),
+                'effort' => env('ANTHROPIC_EFFORT_QUIZ', 'medium'),
+            ],
+            'quiz_review' => [
+                'model' => env('ANTHROPIC_MODEL_REVIEW', 'claude-haiku-5-5'),
+                'effort' => env('ANTHROPIC_EFFORT_REVIEW', 'low'),
+            ],
+        ],
+
+        // USD per million tokens [input, output], for `php artisan ai:usage`
+        // estimates only. Unknown models are reported without a cost.
+        'prices' => [
+            'claude-opus-4-8' => [5.00, 25.00],
+            'claude-opus-5-5' => [4.00, 20.00],
+            'claude-sonnet-4-6' => [3.00, 15.00],
+            'claude-sonnet-5-5' => [2.00, 10.00],
+            'claude-haiku-4-5' => [1.00, 5.00],
+            'claude-haiku-5-5' => [0.10, 0.50],
+        ],
     ],
 
     'dictionary' => [

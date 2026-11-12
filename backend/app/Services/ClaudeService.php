@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\PracticeQuestion;
 use App\Models\Quiz;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -63,7 +64,7 @@ class ClaudeService
 {"meanings": [{"pos": "noun/verb/adjective/adverb...", "definition_en": "簡潔的英文釋義", "definition_zh": "繁體中文翻譯", "example": "一句英文例句"}], "toeic_note": "多益常見搭配詞或用法提示(繁體中文，30字內)", "mnemonic": "記憶小技巧(繁體中文，諧音/字根字首/拆字/聯想擇一，須與字義相關，30字內)"}
 PROMPT;
 
-        $json = $this->callJson($prompt, 1500);
+        $json = $this->callJson($prompt, 1500, 'word_lookup');
 
         return is_array($json) ? $json : [];
     }
@@ -108,7 +109,7 @@ PROMPT;
 
         // Same malformed-JSON retry strategy as generateExamples().
         for ($attempt = 0; $attempt < 3; $attempt++) {
-            $json = $this->callJson($prompt, min(8192, 700 * count($items)));
+            $json = $this->callJson($prompt, min(8192, 700 * count($items)), 'meanings');
             if (! is_array($json)) {
                 continue;
             }
@@ -177,7 +178,7 @@ PROMPT;
 meanings 每個詞性一條，以多益(TOEIC)商務／職場最常考的意思為準、依多益常考程度排序，最多4條；不要列古老、方言或罕用的意思。
 PROMPT;
 
-        $json = $this->callJson($prompt, 1024);
+        $json = $this->callJson($prompt, 1024, 'word_lookup');
 
         if (! is_array($json) || ($json['valid'] ?? false) !== true || empty($json['meanings'])) {
             return [];
@@ -224,7 +225,7 @@ PROMPT;
 每個單字的 meanings 每個詞性一條，以多益(TOEIC)商務／職場最常考的意思為準、依多益常考程度排序，最多4條；不要列古老、方言或罕用的意思。
 PROMPT;
 
-        $json = $this->callJson($prompt, min(8192, 900 * count($words)));
+        $json = $this->callJson($prompt, min(8192, 900 * count($words)), 'word_lookup');
 
         if (! is_array($json)) {
             return [];
@@ -289,7 +290,7 @@ PROMPT;
 PROMPT;
 
         for ($attempt = 0; $attempt < 3; $attempt++) {
-            $json = $this->callJson($prompt, 4096);
+            $json = $this->callJson($prompt, 4096, 'core_audit');
             if (! is_array($json)) {
                 continue;
             }
@@ -353,7 +354,7 @@ PROMPT;
 [{"word":"english", "part_of_speech":"noun/verb/adjective/adverb", "definition_zh":"繁體中文翻譯", "category":"business/office/finance/marketing/hr/logistics/travel/contracts/technology/general 擇一"}]
 PROMPT;
 
-        $json = $this->callJson($prompt, 8192);
+        $json = $this->callJson($prompt, 8192, 'core_seed');
 
         return is_array($json) ? $json : [];
     }
@@ -403,7 +404,7 @@ PROMPT;
 [{"word":"english", "part_of_speech":"noun/verb/adjective/adverb", "definition_zh":"繁體中文翻譯", "example":"一句英文例句", "category":"business/office/finance/travel/general 等", "mnemonic":"記憶小技巧(繁體中文，諧音/字根字首/拆字/聯想擇一，須與字義相關，30字內)"}]
 PROMPT;
 
-        $json = $this->callJson($prompt, 4096);
+        $json = $this->callJson($prompt, 16000, 'quiz_new_words');
 
         return is_array($json) ? $json : [];
     }
@@ -442,7 +443,7 @@ PROMPT;
         // a colon between key and value), which fails to parse. Retry a few times
         // since each attempt is independent and usually succeeds.
         for ($attempt = 0; $attempt < 3; $attempt++) {
-            $json = $this->callJson($prompt, 4096);
+            $json = $this->callJson($prompt, 4096, 'examples');
             if (! is_array($json)) {
                 continue;
             }
@@ -500,7 +501,7 @@ PROMPT;
 
         // Same malformed-JSON retry strategy as generateExamples().
         for ($attempt = 0; $attempt < 3; $attempt++) {
-            $json = $this->callJson($prompt, 4096);
+            $json = $this->callJson($prompt, 4096, 'mnemonics');
             if (! is_array($json)) {
                 continue;
             }
@@ -547,7 +548,7 @@ PROMPT;
 
         // Same malformed-JSON retry strategy as generateExamples().
         for ($attempt = 0; $attempt < 3; $attempt++) {
-            $json = $this->callJson($prompt, 1024);
+            $json = $this->callJson($prompt, 1024, 'study_note');
             if (! is_array($json)) {
                 continue;
             }
@@ -608,7 +609,7 @@ PROMPT;
 
         // Same malformed-JSON retry strategy as generateExamples().
         for ($attempt = 0; $attempt < 3; $attempt++) {
-            $json = $this->callJson($prompt, 4096);
+            $json = $this->callJson($prompt, 4096, 'related');
             if (! is_array($json)) {
                 continue;
             }
@@ -669,7 +670,7 @@ PROMPT;
 PROMPT;
 
         for ($attempt = 0; $attempt < 3; $attempt++) {
-            $json = $this->callJson($prompt, 2048);
+            $json = $this->callJson($prompt, 2048, 'verify_keys');
             if (is_array($json) && $json) {
                 $out = [];
                 foreach ($json as $id => $answer) {
@@ -702,7 +703,7 @@ PROMPT;
             default => $this->vocabPrompt($items),
         };
 
-        $json = $this->callJson($prompt, 4096);
+        $json = $this->callJson($prompt, 16000, 'quiz');
 
         return is_array($json) ? $json : [];
     }
@@ -766,7 +767,7 @@ JSON 格式如下：
 }
 PROMPT;
 
-        $json = $this->callJson($prompt, 4096);
+        $json = $this->callJson($prompt, 16000, 'quiz_news');
 
         return is_array($json) ? $json : [];
     }
@@ -824,7 +825,7 @@ PROMPT;
 }
 PROMPT;
 
-        $json = $this->callJson($prompt, 2048);
+        $json = $this->callJson($prompt, 8000, 'quiz_review');
 
         return is_array($json) ? $json : [
             'summary' => 'AI 檢討產生失敗，請稍後再試。',
@@ -865,7 +866,7 @@ PROMPT;
 }
 PROMPT;
 
-        $json = $this->callJson($prompt, 2048);
+        $json = $this->callJson($prompt, 8000, 'quiz_review');
 
         if (! is_array($json)) {
             return [
@@ -972,7 +973,7 @@ PROMPT;
 PROMPT;
 
         for ($attempt = 0; $attempt < 2; $attempt++) {
-            $json = $this->callJson($prompt, 1200);
+            $json = $this->callJson($prompt, 1200, 'practice_explain');
             $text = is_array($json) ? trim((string) ($json['explanation'] ?? '')) : '';
             if ($text !== '') {
                 return $text;
@@ -983,24 +984,52 @@ PROMPT;
     }
 
     /**
-     * Call the Anthropic Messages API and parse a JSON object/array out of the reply.
+     * The model and effort for one kind of call. `services.anthropic.tasks`
+     * lists the purposes that run on their own model (quiz generation on a
+     * mid-tier model, the post-quiz review on the smallest); every other
+     * purpose uses the global `services.anthropic.model`.
+     *
+     * @return array{model: string, effort: ?string}
      */
-    private function callJson(string $prompt, int $maxTokens = 2048): mixed
+    public static function taskConfig(string $purpose): array
     {
+        $task = config("services.anthropic.tasks.{$purpose}") ?? [];
+
+        return [
+            'model' => ($task['model'] ?? null) ?: config('services.anthropic.model'),
+            'effort' => ($task['effort'] ?? null) ?: null,
+        ];
+    }
+
+    /**
+     * Call the Anthropic Messages API and parse a JSON object/array out of the reply.
+     *
+     * @param  string  $purpose  what the call is for: picks the model (see
+     *                           taskConfig) and tags the ai_usages row
+     */
+    private function callJson(string $prompt, int $maxTokens = 2048, string $purpose = 'other'): mixed
+    {
+        ['model' => $model, 'effort' => $effort] = self::taskConfig($purpose);
+
+        $body = [
+            'model' => $model,
+            'max_tokens' => $maxTokens,
+            'messages' => [
+                ['role' => 'user', 'content' => $prompt],
+            ],
+        ];
+        if ($effort) {
+            $body['output_config'] = ['effort' => $effort];
+        }
+
         try {
-            $resp = Http::timeout(90)
+            $resp = Http::timeout(120)
                 ->withHeaders([
                     'x-api-key' => config('services.anthropic.api_key'),
                     'anthropic-version' => config('services.anthropic.version'),
                     'content-type' => 'application/json',
                 ])
-                ->post(config('services.anthropic.base_url'), [
-                    'model' => config('services.anthropic.model'),
-                    'max_tokens' => $maxTokens,
-                    'messages' => [
-                        ['role' => 'user', 'content' => $prompt],
-                    ],
-                ]);
+                ->post(config('services.anthropic.base_url'), $body);
         } catch (\Throwable $e) {
             Log::error('Claude API error: ' . $e->getMessage());
             return null;
@@ -1011,9 +1040,43 @@ PROMPT;
             return null;
         }
 
-        $text = $resp->json('content.0.text', '');
+        $this->recordUsage($purpose, $model, (array) $resp->json('usage', []), $resp->json('stop_reason'));
+
+        if ($resp->json('stop_reason') === 'max_tokens') {
+            Log::warning("Claude reply cut off at max_tokens ({$maxTokens}) for {$purpose}");
+        }
+
+        // Newer models think before answering, so the reply can open with a
+        // thinking block: read the text blocks, not simply the first block.
+        $text = collect((array) $resp->json('content', []))
+            ->filter(fn ($b) => is_array($b) && ($b['type'] ?? 'text') === 'text' && isset($b['text']))
+            ->pluck('text')
+            ->implode('');
 
         return $this->extractJson($text);
+    }
+
+    /**
+     * One row per successful call, so spend can be traced to a feature
+     * (`php artisan ai:usage`). Never lets bookkeeping break the request.
+     */
+    private function recordUsage(string $purpose, string $model, array $usage, ?string $stopReason): void
+    {
+        try {
+            DB::table('ai_usages')->insert([
+                'purpose' => mb_substr($purpose, 0, 40),
+                'model' => mb_substr($model, 0, 60),
+                'input_tokens' => (int) ($usage['input_tokens'] ?? 0),
+                'output_tokens' => (int) ($usage['output_tokens'] ?? 0),
+                'cache_read_tokens' => (int) ($usage['cache_read_input_tokens'] ?? 0),
+                'cache_write_tokens' => (int) ($usage['cache_creation_input_tokens'] ?? 0),
+                'stop_reason' => $stopReason ? mb_substr($stopReason, 0, 30) : null,
+                'user_id' => auth()->id(),
+                'created_at' => now(),
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('AI usage not recorded: ' . $e->getMessage());
+        }
     }
 
     /**

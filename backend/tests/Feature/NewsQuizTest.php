@@ -138,7 +138,8 @@ XML;
         $this->assertSame(1, $quiz->score);
         $this->assertSame(0, ReviewLog::where('user_id', $user->id)->count());
 
-        // 4. review -> AI feedback persisted
+        // 4. AI review on request -> feedback persisted and shown
+        $this->post(route('quiz.ai-review', $quiz))->assertRedirect(route('quiz.review', $quiz));
         $this->get(route('quiz.review', $quiz))->assertOk()->assertSee('你的閱讀理解表現不錯。');
         $quiz->refresh();
         $this->assertNotEmpty($quiz->ai_review['summary']);
