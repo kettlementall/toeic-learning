@@ -9,6 +9,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /**
@@ -108,8 +109,51 @@ class AiCostControlsTest extends TestCase
             $claude->generateQuiz(['budget'], $type);
         }
 
-        Http::assertSentCount(3);
+        $claude->generateNewsQuiz('Acme opens a plant', 'Acme Corp opened a new plant in Ohio.', ['vocab_count' => 10, 'accuracy' => null]);
+
+        Http::assertSentCount(4);
         Http::assertSent(fn (Request $r) => ! str_contains($r['messages'][0]['content'], 'explanation'));
+        Http::assertNotSent(fn (Request $r) => str_contains($r['messages'][0]['content'], '"explanation"'));
+    }
+
+    /**
+     * Every quiz type gets the on-request explanation, with the context that
+     * type needs: the word, the grammar point, or the news article.
+     */
+    #[DataProvider('quizTypes')]
+    public function test_every_quiz_type_can_be_explained(string $type, array $question, ?array $article, string $context): void
+    {
+        Http::fake(['api.anthropic.com/*' => Http::response([
+            'content' => [['type' => 'text', 'text' => '{"explanation": "解說"}']],
+        ], 200)]);
+        $user = User::factory()->create();
+        $quiz = Quiz::create([
+            'user_id' => $user->id, 'title' => $type, 'type' => $type, 'scope' => 'mixed',
+            'status' => 'completed', 'score' => 0, 'total' => 1, 'completed_at' => now(),
+            'article' => $article,
+        ]);
+        $q = $quiz->questions()->create($question + [
+            'options' => ['one', 'two', 'three', 'four'],
+            'correct_answer' => 'A', 'user_answer' => 'C', 'is_correct' => false,
+        ]);
+
+        $this->actingAs($user)->get(route('quiz.review', $quiz))->assertOk()->assertSee('AI 解說');
+        $this->postJson(route('quiz.explain', [$quiz, $q]))->assertOk()->assertJson(['explanation' => '解說']);
+
+        Http::assertSent(fn (Request $r) => str_contains($r['messages'][0]['content'], $context)
+            && str_contains($r['messages'][0]['content'], '學生選了 (C)，答錯了'));
+    }
+
+    public static function quizTypes(): array
+    {
+        return [
+            'vocabulary MC' => ['vocab_mc', ['word' => 'budget', 'question' => 'The ____ was approved.'], null, '考的單字：budget'],
+            'fill-in-the-blank' => ['fill_blank', ['word' => 'approve', 'question' => 'The plan was ____.'], null, '考的單字：approve'],
+            'Part 5 grammar' => ['part5_grammar', ['grammar_point' => 'preposition', 'question' => 'We met ____ noon.'], null, '考點：preposition'],
+            'news reading' => ['news_reading', ['question' => 'What did Acme open?'],
+                ['title' => 'Acme', 'url' => 'https://example.com', 'passage' => 'Acme Corp opened a new plant in Ohio.'],
+                'Acme Corp opened a new plant in Ohio.'],
+        ];
     }
 
     public function test_a_question_is_explained_on_request_once(): void
