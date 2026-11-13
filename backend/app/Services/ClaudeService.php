@@ -912,6 +912,7 @@ PROMPT;
     {
         $list = implode(', ', $grammarPoints);
         $n = count($grammarPoints);
+        $target = (int) config('quiz.part5.target_score', 860);
 
         return <<<PROMPT
 請出 {$n} 題道地的多益(TOEIC) Part 5「句子填空文法題」(4選1)，每題分別測驗以下文法考點(依序對應)：
@@ -919,7 +920,11 @@ PROMPT;
 
 文法考點代碼意義：word_form詞性變化, tense_voice時態語態, preposition介系詞, conjunction連接詞vs介系詞,
 pronoun代名詞, relative關係詞, comparison比較級, agreement主謂一致, collocation慣用搭配, vocab_in_context語境詞彙。
-每題提供一個商務情境句子(空格用 ____ 表示)，4 個選項含合理誘答，只有一個正確。
+
+難度：對象是目標 {$target} 分以上的考生。請出真題中偏難、能拉開高分差距的題目，不要出只看空格前後一兩個字就能作答的基礎題：
+- 句子長度比照真題(約 15–30 個字)，用商務情境(公告、合約、人事、財務、物流、行銷、客服等)，可含子句、分詞片語或插入語。
+- 誘答選項要有真正的迷惑性：詞性題用同字根的四種詞形；介系詞與連接詞題混用意思相近的介系詞、連接詞和連接副詞(例如 despite / although / however)；時態語態題的選項只差在時態或主被動；語境詞彙與慣用搭配題用詞性相同、意思相近，但搭配或語意不合的字。
+- 每題只有一個正確答案，依標準書面英語沒有爭議。
 只回傳 JSON 陣列，每題格式如下，不要其他文字：
 [{"grammar_point":"對應的考點代碼", "question":"含 ____ 的英文句子", "options":["A","B","C","D"], "answer":"正確選項的完整文字，必須與 options 其中一項一字不差"}]
 PROMPT;

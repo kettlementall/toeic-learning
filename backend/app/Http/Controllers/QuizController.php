@@ -329,7 +329,8 @@ class QuizController extends Controller
             // can't be looked up (function words like "where", typos) so we never
             // queue empty cards. Skip words already in this quiz: they were graded
             // at submit and already carry today's result. Grammar
-            // quizzes don't touch the vocab library; they adapt via boostGrammar().
+            // quizzes don't touch the vocab library; Part 5 adapts from the
+            // answers themselves (QuizBuilderService::grammarWeights).
             if ($quiz->type === 'vocab_mc') {
                 $alreadyTested = $quiz->questions
                     ->pluck('word')
@@ -363,61 +364,12 @@ class QuizController extends Controller
                     }
                 }
             }
-
-            // feed AI-suggested weak grammar points back into the adaptive engine
-            $this->boostGrammar($quiz, $review['review_grammar'] ?? []);
         }
 
         return redirect()->route('quiz.review', $quiz);
     }
 
-    /**
-     * Make AI-recommended weak grammar points get drilled harder in upcoming
-     * adaptive Part 5 quizzes: record a weak review_log per point (mirrors the
-     * vocab demote loop). Naturally decays as the point is answered correctly.
-     */
-    private function boostGrammar(Quiz $quiz, array $points): void
-    {
-        foreach ($points as $p) {
-            $code = $this->normalizeGrammarPoint((string) $p);
-            if ($code) {
-                ReviewLog::create([
-                    'user_id' => $quiz->user_id,
-                    'quiz_id' => $quiz->id,
-                    'grammar_point' => $code,
-                    'quality' => 1, // counts as a weakness signal
-                    'reviewed_at' => now(),
-                ]);
-            }
-        }
-    }
 
-    /**
-     * Map an AI grammar suggestion (code or Chinese label) to a valid code.
-     */
-    private function normalizeGrammarPoint(string $raw): ?string
-    {
-        $raw = trim($raw);
-        if (in_array($raw, QuizBuilderService::GRAMMAR_POINTS, true)) {
-            return $raw;
-        }
-
-        $labels = [
-            '詞性變化' => 'word_form', '詞性' => 'word_form',
-            '時態與語態' => 'tense_voice', '時態' => 'tense_voice', '語態' => 'tense_voice',
-            '介系詞' => 'preposition', '連接詞' => 'conjunction',
-            '代名詞' => 'pronoun', '關係詞' => 'relative', '關係代名詞' => 'relative',
-            '比較級' => 'comparison', '主謂一致' => 'agreement',
-            '慣用搭配' => 'collocation', '語境詞彙' => 'vocab_in_context',
-        ];
-        foreach ($labels as $label => $code) {
-            if (mb_strpos($raw, $label) !== false) {
-                return $code;
-            }
-        }
-
-        return null;
-    }
 
     // ---------- helpers ----------
 

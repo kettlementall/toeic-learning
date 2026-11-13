@@ -45,10 +45,9 @@ class DashboardController extends Controller
             ->values();
 
         // grammar weakness ranking (Part 5), from the answers actually given.
-        // Not review_logs: boostGrammar() writes a quality-1 row for every
-        // point an AI review flags, indistinguishable from a wrong answer,
-        // which turned a 31% error rate into 97%. The adaptive selector keeps
-        // reading those rows on purpose; this ranking reports what happened.
+        // Not review_logs: AI reviews once wrote a quality-1 row for every
+        // point they flagged, indistinguishable from a wrong answer, which
+        // turned a 31% error rate into 97%. Those rows are still in the table.
         $grammarStats = QuizQuestion::query()
             ->join('quizzes', 'quizzes.id', '=', 'quiz_questions.quiz_id')
             ->where('quizzes.user_id', $userId)

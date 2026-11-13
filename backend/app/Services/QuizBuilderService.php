@@ -4,7 +4,6 @@ namespace App\Services;
 
 use App\Models\Quiz;
 use App\Models\QuizQuestion;
-use App\Models\ReviewLog;
 use App\Models\UserWord;
 use App\Models\Word;
 use App\Support\Lemma;
@@ -458,24 +457,7 @@ class QuizBuilderService
             return $this->fillToN($points, $n);
         }
 
-        // adaptive: weight = error rate per grammar point (default weight for unseen)
-        $stats = ReviewLog::where('user_id', auth()->id())
-            ->whereNotNull('grammar_point')
-            ->select('grammar_point', DB::raw('COUNT(*) as total'), DB::raw('SUM(CASE WHEN quality < 3 THEN 1 ELSE 0 END) as wrong'))
-            ->groupBy('grammar_point')
-            ->get()
-            ->keyBy('grammar_point');
-
-        $weights = [];
-        foreach (self::GRAMMAR_POINTS as $gp) {
-            $s = $stats->get($gp);
-            if (! $s || $s->total == 0) {
-                $weights[$gp] = 1.0; // unseen -> baseline
-            } else {
-                // error rate, floored so every point keeps some chance
-                $weights[$gp] = 0.2 + ($s->wrong / $s->total) * 2.0;
-            }
-        }
+        $weights = $this->grammarWeights((int) auth()->id());
 
         // weighted random pick (with replacement) of n points
         $picks = [];
@@ -484,6 +466,48 @@ class QuizBuilderService
         }
 
         return $picks;
+    }
+
+    /**
+     * Adaptive Part 5 weight per grammar point: `0.2 + error rate × 2`, or 1.0
+     * for a point with no recent answers.
+     *
+     * Counts only Part 5 answers actually given in the last
+     * `quiz.part5.window_days`. Not review_logs: AI reviews of vocabulary
+     * quizzes used to write a quality-1 row for every point they flagged,
+     * which made collocation (86% right) look like the weakest point and hid
+     * prepositions (44%). The window lets an old weakness fade once fixed.
+     *
+     * @return array<string, float>  every GRAMMAR_POINTS code => weight
+     */
+    public function grammarWeights(int $userId): array
+    {
+        $since = now()->subDays((int) config('quiz.part5.window_days', 90));
+
+        $stats = QuizQuestion::query()
+            ->join('quizzes', 'quizzes.id', '=', 'quiz_questions.quiz_id')
+            ->where('quizzes.user_id', $userId)
+            ->where('quizzes.type', 'part5_grammar')
+            ->where('quizzes.status', 'completed')
+            ->where('quizzes.completed_at', '>=', $since)
+            ->whereNotNull('quiz_questions.grammar_point')
+            ->whereNotNull('quiz_questions.is_correct')
+            ->select('quiz_questions.grammar_point',
+                DB::raw('COUNT(*) as total'),
+                DB::raw('SUM(CASE WHEN quiz_questions.is_correct THEN 0 ELSE 1 END) as wrong'))
+            ->groupBy('quiz_questions.grammar_point')
+            ->get()
+            ->keyBy('grammar_point');
+
+        $weights = [];
+        foreach (self::GRAMMAR_POINTS as $gp) {
+            $s = $stats->get($gp);
+            $weights[$gp] = $s && $s->total > 0
+                ? 0.2 + ($s->wrong / $s->total) * 2.0 // floored so every point keeps some chance
+                : 1.0;                                  // no recent answers -> baseline
+        }
+
+        return $weights;
     }
 
     /**

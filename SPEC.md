@@ -122,7 +122,7 @@ seed list, the dictionary API, or AI-generated new words.
 | `question`      | text        | sentence with `____` blank             |
 | `options`       | json        | array of 4 option strings              |
 | `correct_answer`| string(5)   | letter `A`–`D` (uppercased)            |
-| `explanation`   | text        | Chinese rationale                      |
+| `explanation`   | text        | Chinese rationale; null until the learner asks (FR-26a) |
 | `user_answer`   | string(5)   | letter, nullable                       |
 | `is_correct`    | boolean     | nullable until graded                  |
 
@@ -478,8 +478,20 @@ here reads or writes `quizzes`, `quiz_questions`, `user_words` or `review_logs`.
   review.
 
 ### 3.6 AI review (`QuizController::review`, `ClaudeService::reviewQuiz`)
-- **FR-26** On first view of a completed quiz, generate `ai_review`
-  (`{summary, weaknesses, review_words[], review_grammar[]}`) once and persist.
+- **FR-26** The results page makes **no AI call**: it shows the score, the
+  missed words/grammar points, and a "Get AI analysis" button. Pressing it
+  (`POST /quiz/{quiz}/ai-review`, completed quizzes only) generates `ai_review`
+  (`{summary, weaknesses, review_words[], review_grammar[]}`) once and persists
+  it. Wrong answers already fed the schedule and stats at submit (FR-24), so
+  skipping the review loses no learning signal.
+- **FR-26a** **Explanations on request.** Generated questions carry no
+  explanation (most were never read, and they were most of each quiz's output
+  tokens). Every question on the results page, of every quiz type, has an
+  "AI 解說" button (`POST /quiz/{quiz}/questions/{question}/explain`, owner-only,
+  completed quizzes only). `explainQuizQuestion()` explains the key and, when
+  the learner was wrong, their own choice, with the word, grammar point or
+  news article as context; the text is saved to `explanation`, so each question
+  is explained once. Questions from before this change keep their stored text.
 - **FR-27** **Vocab quizzes only**: each AI-suggested `review_word` is looked up
   via the dictionary; if it resolves to a real word **not already tested in this
   quiz**, it is `queueForReview`d with `source=ai_review` (FR-14a) — queued for
@@ -492,10 +504,12 @@ here reads or writes `quizzes`, `quiz_questions`, `user_words` or `review_logs`.
   whatever its sentences were about — courtrooms, vaccines — and each such card
   competes with the core list for review time. The prompt also steers away from
   legal/medical/political/military vocabulary.
-- **FR-28** AI-suggested weak grammar points are normalized (code or Chinese
-  label) and recorded as `review_log` rows with `quality=1`
-  (`boostGrammar`), nudging the adaptive selector. These decay naturally as the
-  point is later answered correctly.
+- **FR-28** AI-suggested weak grammar points are shown on the review only.
+  They used to be written to `review_logs` as `quality=1` rows (`boostGrammar`,
+  removed) to nudge the adaptive selector; reviews of *vocabulary* quizzes
+  flagged points too, and those rows (422 of 595 for the main learner) made
+  collocation (86% right) look weaker than prepositions (44%). The selector now
+  reads real Part 5 answers (§4.3); the old rows remain in the table, unread.
 - **FR-28a** **News quizzes** get comprehension-focused feedback
   (`reviewNewsQuiz`) and return empty `review_words`/`review_grammar`: their
   vocab loop already closed at creation (FR-22d), and comprehension questions
@@ -510,10 +524,8 @@ here reads or writes `quizzes`, `quiz_questions`, `user_words` or `review_logs`.
 - **FR-31** Grammar weakness ranking: per `grammar_point`, error rate =
   `wrong/total` over the learner's answered Part 5 questions
   (`quiz_questions.is_correct` in completed quizzes), sorted desc. Not from
-  `review_logs`: `boostGrammar()` (FR-28) writes quality-1 rows that cannot be
-  told from wrong answers and inflated the rates (31% read as 97%). The
-  adaptive selector (§4.3) still reads `review_logs`, boosts included, by
-  design.
+  `review_logs`: the old `boostGrammar()` rows (FR-28) cannot be told from
+  wrong answers and inflated the rates (31% read as 97%).
 - **FR-32** Vocab weakness by part of speech (same error-rate computation).
 - **FR-33** Leech list (top 10 by `lapses`).
 - **FR-34** Latest AI-recommended grammar focus from recent reviews
@@ -523,9 +535,8 @@ here reads or writes `quizzes`, `quiz_questions`, `user_words` or `review_logs`.
   learner's own quiz answers over the last `toeic_estimate.window_days`.
   **Listening is not estimated** — the practice bank (§3.9) tests it, but its
   results are deliberately kept out of this estimate (FR-44).
-  - Reads `quiz_questions.is_correct` only, never `review_logs`: `boostGrammar()`
-    (FR-28) writes quality-1 rows for AI-suggested points, which would count as
-    wrong answers that were never given.
+  - Reads `quiz_questions.is_correct` only, never `review_logs`: the old
+    `boostGrammar()` rows (FR-28) would count as wrong answers never given.
   - Three components: Part 5 accuracy (`part5_grammar`), Part 7 accuracy
     (`news_reading`), and vocabulary measured on **first exposure** — the first
     question ever asked about each word that entered through a quiz
@@ -723,10 +734,19 @@ that interval on a false result.
 ### 4.3 Adaptive grammar-point selection (`selectGrammarPoints`)
 - **`specific`**: intersect requested `points` with the valid set, then repeat
   cyclically to length `n` (`fillToN`).
-- **`adaptive`**: per grammar point, `weight = 1.0` if unseen, else
-  `0.2 + (wrong/total)*2.0` (wrong = `quality<3` in `review_logs`). Pick `n`
-  points by **weighted random with replacement** — so heavily-missed points
-  appear more often, but every point keeps a floor chance.
+- **`adaptive`** (`grammarWeights`): per grammar point, `weight = 1.0` with
+  no recent answers, else `0.2 + (wrong/total)*2.0`, counted over the learner's
+  **answered Part 5 questions** (`quiz_questions.is_correct`, completed
+  `part5_grammar` quizzes) from the last `quiz.part5.window_days` (90). Not
+  `review_logs`, whose AI-review rows distorted the ranking (FR-28); the
+  window lets a fixed weakness stop being drilled. Pick `n` points by
+  **weighted random with replacement** — so heavily-missed points appear more
+  often, but every point keeps a floor chance.
+- **Difficulty**: `part5Prompt()` pitches questions at a learner aiming for
+  `quiz.part5.target_score` (860, the gold certificate): exam-length business
+  sentences (15–30 words) with clauses, distractors that genuinely compete
+  (same-root word forms; near-synonym prepositions / conjunctions / conjunctive
+  adverbs; options differing only in tense or voice), one indisputable key.
 
 ### 4.4 Grammar points (`QuizBuilderService::GRAMMAR_POINTS`)
 `word_form`, `tense_voice`, `preposition`, `conjunction`, `pronoun`,
@@ -740,8 +760,17 @@ Human/Chinese labels are mapped in the dashboard and in
 
 ### 5.1 Anthropic Claude (`ClaudeService`)
 - **Endpoint**: `POST https://api.anthropic.com/v1/messages`, headers
-  `x-api-key`, `anthropic-version: 2023-06-01`. Model from
-  `services.anthropic.model` (default `claude-sonnet-4-6`). 90s HTTP timeout.
+  `x-api-key`, `anthropic-version: 2023-06-01`. 120s HTTP timeout.
+- **Model per purpose**: every `callJson()` names a purpose. Purposes listed in
+  `services.anthropic.tasks` use their own model and `output_config.effort`
+  (quiz generation `quiz`/`quiz_news`/`quiz_new_words` → `claude-sonnet-5-5`
+  medium; `quiz_explain` → Sonnet low; `quiz_review` → `claude-haiku-5-5`
+  low); all others use `services.anthropic.model`. Replies are read from their
+  `text` blocks, since thinking models can open with a `thinking` block.
+- **Usage log**: each successful call writes an `ai_usages` row (purpose,
+  model, input/output/cache tokens, stop reason, user). `php artisan ai:usage
+  --days=N` reports calls, tokens and estimated cost by purpose and model from
+  `services.anthropic.prices`.
 - **Calls**:
   - `enrich(word, dictData)` — per-POS Chinese + TOEIC note + mnemonic (≤1024 tokens).
   - `generateNewWords(n, level?, category?)` — fresh TOEIC words, each with a
@@ -802,14 +831,17 @@ Human/Chinese labels are mapped in the dashboard and in
 | Variable             | Required | Default                                           |
 |----------------------|----------|---------------------------------------------------|
 | `ANTHROPIC_API_KEY`  | for AI   | —                                                 |
-| `ANTHROPIC_MODEL`    | no       | `claude-sonnet-4-6`                               |
+| `ANTHROPIC_MODEL`    | no       | `claude-sonnet-4-6` (calls without a task entry)  |
+| `ANTHROPIC_MODEL_QUIZ` / `ANTHROPIC_EFFORT_QUIZ` | no | `claude-sonnet-5-5` / `medium` (also explanations, at `ANTHROPIC_EFFORT_EXPLAIN`=`low`) |
+| `ANTHROPIC_MODEL_REVIEW` / `ANTHROPIC_EFFORT_REVIEW` | no | `claude-haiku-5-5` / `low` |
 | `DICTIONARY_API_URL` | no       | `https://api.dictionaryapi.dev/api/v2/entries/en` |
 | `NEWS_FEED_*`        | no       | RSS per topic: `PRESS_RELEASE` (PR Newswire), `US_BUSINESS` (CNBC), `BUSINESS`/`TECHNOLOGY` (BBC) |
 | `NEWS_USER_AGENT`    | no       | browser-like UA for fetching RSS/articles         |
 | `DB_*`               | yes      | MySQL (Docker) / SQLite (local)                   |
 
-Config keys live in `config/services.php` under `anthropic.*`,
-`dictionary.url`, and `news.*`.
+Config keys live in `config/services.php` under `anthropic.*` (including
+`tasks` and `prices`), `dictionary.url`, and `news.*`. Part 5 tuning
+(`window_days`, `target_score`) is in `config/quiz.php`.
 
 ### 6.3 Practice bank (`config/practice.php`)
 
